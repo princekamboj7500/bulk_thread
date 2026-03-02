@@ -4,6 +4,7 @@ import Papa from "papaparse";
 
 const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
 const CSV_FILE = path.join(process.cwd(), "SanMar_EPDD.csv");
+const ZIP_FILE = path.join(process.cwd(), "SanMar_EPDD.zip");
 
 export async function downloadSanmarCSV(options?: { force?: boolean }) {
   const force = options?.force === true;
@@ -13,11 +14,11 @@ export async function downloadSanmarCSV(options?: { force?: boolean }) {
     return true;
   }
 
-  // If force rerun → delete cache + csv
   if (force) {
     console.log("Force sync enabled → clearing old cache...");
     if (fs.existsSync(CACHE_FILE)) fs.unlinkSync(CACHE_FILE);
     if (fs.existsSync(CSV_FILE)) fs.unlinkSync(CSV_FILE);
+    if (fs.existsSync(ZIP_FILE)) fs.unlinkSync(ZIP_FILE);
   }
 
   const SftpClient = (await import("ssh2-sftp-client")).default;
@@ -25,7 +26,7 @@ export async function downloadSanmarCSV(options?: { force?: boolean }) {
 
   const sftp = new SftpClient();
 
-  console.log(" Connecting to SanMar SFTP...");
+  console.log("Connecting to SanMar SFTP...");
 
   await sftp.connect({
     host: process.env.FTP_DOMAIN_SANMAR!,
@@ -35,58 +36,25 @@ export async function downloadSanmarCSV(options?: { force?: boolean }) {
     readyTimeout: 60000,
   });
 
-  console.log(" Downloading EPDD zip...");
-  const zipBuffer = await sftp.get("/SanMarPDD/SanMar_EPDD_csv.zip");
+  console.log("Downloading EPDD zip to disk...");
+  await sftp.fastGet("/SanMarPDD/SanMar_EPDD_csv.zip", ZIP_FILE);
   await sftp.end();
 
-  console.log(" Unzipping CSV...");
-  const zip = new AdmZip(zipBuffer as Buffer);
+  console.log("Unzipping CSV from disk...");
+  const zip = new AdmZip(ZIP_FILE);
   const csvEntry = zip
     .getEntries()
     .find((e: any) => e.entryName.toLowerCase().endsWith(".csv"));
 
   if (!csvEntry) throw new Error("CSV not found in ZIP");
 
-  const csvBuffer = csvEntry.getData();
-  fs.writeFileSync(CSV_FILE, csvBuffer);
+  zip.extractEntryTo(csvEntry.entryName, process.cwd(), false, true);
 
-  console.log(" Parsing CSV → streaming to cache...");
+  // Optional: delete zip after extraction to save space
+  if (fs.existsSync(ZIP_FILE)) fs.unlinkSync(ZIP_FILE);
 
-  // return new Promise((resolve, reject) => {
-  //   const fileStream = fs.createReadStream(CSV_FILE);
-  //   const writeStream = fs.createWriteStream(CACHE_FILE);
+  console.log("Parsing CSV → streaming to cache...");
 
-  //   writeStream.write("[\n");
-  //   let isFirst = true;
-  //   let count = 0;
-
-  //   Papa.parse(fileStream as any, {
-  //     header: true,
-  //     skipEmptyLines: true,
-
-  //     step: (result) => {
-  //       const json = JSON.stringify(result.data);
-
-  //       if (!isFirst) writeStream.write(",\n");
-  //       writeStream.write(json);
-
-  //       isFirst = false;
-  //       count++;
-  //     },
-
-  //     complete: () => {
-  //       writeStream.write("\n]");
-  //       writeStream.end();
-  //       console.log(` Parsed ${count} rows & cache rebuilt`);
-  //       resolve(true);
-  //     },
-
-  //     error: (err) => {
-  //       console.error("CSV Parsing Error:", err);
-  //       reject(err);
-  //     },
-  //   });
-  // });
   return new Promise((resolve, reject) => {
     const fileStream = fs.createReadStream(CSV_FILE);
     const writeStream = fs.createWriteStream(CACHE_FILE);
