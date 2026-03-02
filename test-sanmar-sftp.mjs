@@ -10,9 +10,9 @@ async function test() {
     console.log("Connecting to SanMar SFTP...");
 
     await sftp.connect({
-      host: process.env.SANMAR_Domain,
-      username: process.env.SANMAR_USER,
-      password: process.env.SANMAR_PASS,
+      host: process.env.FTP_DOMAIN_SANMAR,
+      username: process.env.FTP_USERNAME_SANMAR,
+      password: process.env.FTP_PASSWORD_SANMAR,
       port: 2200,
       readyTimeout: 60000,
     });
