@@ -23,7 +23,7 @@ export async function downloadSanmarCSV(options?: { force?: boolean }) {
   }
 
   const SftpClient = (await import("ssh2-sftp-client")).default;
-  const AdmZip = (await import("adm-zip")).default;
+  // const AdmZip = (await import("adm-zip")).default;
 
   const sftp = new SftpClient();
 
@@ -50,11 +50,22 @@ export async function downloadSanmarCSV(options?: { force?: boolean }) {
   // if (!csvEntry) throw new Error("CSV not found in ZIP");
 
   // zip.extractEntryTo(csvEntry.entryName, process.cwd(), false, true);
-  await fs
-    .createReadStream(ZIP_FILE)
-    .pipe(unzipper.ParseOne(/\.csv$/))
-    .pipe(fs.createWriteStream(CSV_FILE))
-    .promise();
+  await new Promise<void>((resolve, reject) => {
+    fs.createReadStream(ZIP_FILE)
+      .pipe(unzipper.Parse())
+      .on("entry", (entry) => {
+        const fileName = entry.path.toLowerCase();
+
+        if (fileName.endsWith(".csv")) {
+          entry.pipe(fs.createWriteStream(CSV_FILE))
+            .on("finish", resolve)
+            .on("error", reject);
+        } else {
+          entry.autodrain(); // skip other files
+        }
+      })
+      .on("error", reject);
+  });
   // Optional: delete zip after extraction to save space
   if (fs.existsSync(ZIP_FILE)) fs.unlinkSync(ZIP_FILE);
 
