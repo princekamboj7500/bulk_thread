@@ -338,11 +338,12 @@ export default function Index() {
                           <s-stack direction="inline" gap="small-300"
                             alignItems="center">
                             <div style={{display: "flex", alignItems: "center", gap: "6px"}}>
-                              <s-box blockSize="40px" inlineSize="40px">
+                              <s-box blockSize="50px" inlineSize="50px">
                                 <s-image
-                                  objectFit="cover"
+                                  objectFit="contain"
                                   alt="Ocean Sunset puzzle thumbnail"
                                   src={p?.image}
+                                  border="base strong" borderRadius="base"
                                 />
                               </s-box>
                               <s-paragraph lineClamp={1}>{p.title}</s-paragraph>
@@ -360,34 +361,6 @@ export default function Index() {
                               tone="critical"
                               disabled={rowLoading}
                               {...(rowLoading ? { loading: true } : {})}
-                              // onClick={async () => {
-                              //   if (!p.productId) return;
-
-                              //   const confirmDelete = confirm(
-                              //     `Are you sure you want to delete "${p.title}" from Shopify?`
-                              //   );
-                              //   if (!confirmDelete) return;
-
-                              //   setRowLoading(p.style, true);
-                              //   try {
-                              //     const res = await fetch("/api/product/delete", {
-                              //       method: "POST",
-                              //       headers: { "Content-Type": "application/json" },
-                              //       body: JSON.stringify({ productId: p.productId }),
-                              //     });
-
-                              //     const data = await res.json();
-
-                              //     if (data.success) {
-                              //       shopify.toast.show("Product deleted from Shopify");
-                              //       await loadProducts(page);
-                              //     } else {
-                              //       shopify.toast.show("Delete failed");
-                              //     }
-                              //   } finally {
-                              //     setRowLoading(p.style, false);
-                              //   }
-                              // }}
                               commandFor="delete-modal"
                               onClick={() => {
                                 if (!p.productId) return;
