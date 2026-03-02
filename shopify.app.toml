@@ -2,7 +2,7 @@
 
 client_id = "172fa34bff1cf81e126a6f46238252fa"
 name = "bulk-thread"
-application_url = "https://thesaurus-therefore-singer-retailers.trycloudflare.com"
+application_url = "https://bulk-threads-sanmar-4ad69115d067.herokuapp.com"
 embedded = true
 
 [build]
@@ -24,4 +24,4 @@ api_version = "2026-04"
 scopes = "write_products,write_products,read_inventory,write_inventory,read_locations"
 
 [auth]
-redirect_urls = [ "https://thesaurus-therefore-singer-retailers.trycloudflare.com/api/auth" ]
+redirect_urls = [ "https://bulk-threads-sanmar-4ad69115d067.herokuapp.com/api/auth" ]
