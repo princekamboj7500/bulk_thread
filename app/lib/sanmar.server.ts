@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import Papa from "papaparse";
+import unzipper from "unzipper";
 
 const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
 const CSV_FILE = path.join(process.cwd(), "SanMar_EPDD.csv");
@@ -41,15 +42,19 @@ export async function downloadSanmarCSV(options?: { force?: boolean }) {
   await sftp.end();
 
   console.log("Unzipping CSV from disk...");
-  const zip = new AdmZip(ZIP_FILE);
-  const csvEntry = zip
-    .getEntries()
-    .find((e: any) => e.entryName.toLowerCase().endsWith(".csv"));
+  // const zip = new AdmZip(ZIP_FILE);
+  // const csvEntry = zip
+  //   .getEntries()
+  //   .find((e: any) => e.entryName.toLowerCase().endsWith(".csv"));
 
-  if (!csvEntry) throw new Error("CSV not found in ZIP");
+  // if (!csvEntry) throw new Error("CSV not found in ZIP");
 
-  zip.extractEntryTo(csvEntry.entryName, process.cwd(), false, true);
-
+  // zip.extractEntryTo(csvEntry.entryName, process.cwd(), false, true);
+  await fs
+    .createReadStream(ZIP_FILE)
+    .pipe(unzipper.ParseOne(/\.csv$/))
+    .pipe(fs.createWriteStream(CSV_FILE))
+    .promise();
   // Optional: delete zip after extraction to save space
   if (fs.existsSync(ZIP_FILE)) fs.unlinkSync(ZIP_FILE);
 
