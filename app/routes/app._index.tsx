@@ -1,0 +1,496 @@
+import { useEffect, useState } from "react";
+import type {
+  ActionFunctionArgs,
+  HeadersFunction,
+  LoaderFunctionArgs,
+} from "react-router";
+import { useFetcher } from "react-router";
+import { useAppBridge } from "@shopify/app-bridge-react";
+import { authenticate } from "../shopify.server";
+import { boundary } from "@shopify/shopify-app-react-router/server";
+
+/* ================= SKELETON ================= */
+
+function SkeletonBox({ width = "100%" }: { width?: string }) {
+  return (
+    <div
+      style={{
+        height: 14,
+        width,
+        borderRadius: 6,
+        background:
+          "linear-gradient(90deg, #e5e7eb 25%, #f3f4f6 37%, #e5e7eb 63%)",
+        backgroundSize: "400% 100%",
+        animation: "skeleton 1.4s ease infinite",
+      }}
+    />
+  );
+}
+
+function ProductsSkeleton({ rows = 10 }: { rows?: number }) {
+  return (
+    <div style={skeletonCard}>
+      <div style={skeletonRow(true)}>
+        <SkeletonBox width="20%" />
+        <SkeletonBox width="15%" />
+        <SkeletonBox width="20%" />
+        <SkeletonBox width="10%" />
+        <SkeletonBox width="15%" />
+        <SkeletonBox width="20%" />
+      </div>
+
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} style={skeletonRow()}>
+          <SkeletonBox width="20%" />
+          <SkeletonBox width="15%" />
+          <SkeletonBox width="20%" />
+          <SkeletonBox width="10%" />
+          <SkeletonBox width="15%" />
+          <SkeletonBox width="20%" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ================= SERVER ================= */
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  await authenticate.admin(request);
+  return null;
+};
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { admin } = await authenticate.admin(request);
+
+  const color = ["Red", "Orange", "Yellow", "Green"][
+    Math.floor(Math.random() * 4)
+  ];
+
+  const response = await admin.graphql(
+    `#graphql
+      mutation populateProduct($product: ProductCreateInput!) {
+        productCreate(product: $product) {
+          product {
+            id
+            title
+            handle
+            status
+            variants(first: 10) {
+              edges {
+                node {
+                  id
+                  price
+                  barcode
+                  createdAt
+                }
+              }
+            }
+          }
+        }
+      }`,
+    {
+      variables: {
+        product: { title: `${color} Snowboard` },
+      },
+    },
+  );
+
+  const responseJson = await response.json();
+  const product = responseJson.data!.productCreate!.product!;
+  const variantId = product.variants.edges[0]!.node!.id!;
+
+  await admin.graphql(
+    `#graphql
+    mutation updateVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+        productVariants { id }
+      }
+    }`,
+    {
+      variables: {
+        productId: product.id,
+        variants: [{ id: variantId, price: "100.00" }],
+      },
+    },
+  );
+
+  return { product };
+};
+
+/* ================= UI ================= */
+
+export default function Index() {
+  const fetcher = useFetcher<typeof action>();
+  const shopify = useAppBridge();
+
+  // const [syncStatus, setSyncStatus] = useState<"idle" | "running" | "done">("idle");
+  const [syncStatus, setSyncStatus] = useState<
+    "checking" | "running" | "done"
+  >("checking");
+  const [products, setProducts] = useState<any[]>([]);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [loadingProducts, setLoadingProducts] = useState(true);
+  const [selectedProduct, setSelectedProduct] = useState<any | null>(null);
+  const [loadingMap, setLoadingMap] = useState<Record<string, boolean>>({});
+
+  function setRowLoading(style: string, value: boolean) {
+    setLoadingMap((prev) => ({ ...prev, [style]: value }));
+  }
+
+  async function syncInventoryForExisting(productsList: any[]) {
+    for (const p of productsList) {
+      if (!p.existsInStore || !p.productId) continue;
+
+      try {
+        await fetch("/api/products/sync-inventory", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            style: p.style,
+            productId: p.productId,
+          }),
+        });
+      } catch (err) {
+        console.error("Inventory sync failed for", p.style, err);
+      }
+    }
+  }
+
+  // useEffect(() => {
+  //   async function checkStatus() {
+  //     const res = await fetch("/api/sync/status");
+  //     const data = await res.json();
+
+  //     // KEY FIX
+  //     if (!data.ready) {
+  //       setSyncStatus("running");
+  //       startPolling();
+  //     } else {
+  //       setSyncStatus("done");
+  //       loadProducts(1);
+  //     }
+  //   }
+
+  //   checkStatus();
+  // }, []);
+  useEffect(() => {
+    async function checkStatus() {
+      const res = await fetch("/api/sync/status");
+      const data = await res.json();
+
+      if (!data.ready) {
+        setSyncStatus("running");
+        startPolling();
+      } else {
+        setSyncStatus("done");
+        loadProducts(1);
+      }
+    }
+
+    checkStatus();
+  }, []);
+  async function loadProducts(pageNumber: number) {
+    setLoadingProducts(true);
+
+    const res = await fetch(`/api/products?page=${pageNumber}`);
+    const data = await res.json();
+
+    const list = data.products || [];
+    setProducts(list);
+    setTotalPages(data.totalPages || 1);
+    setPage(data.page || 1);
+
+    setLoadingProducts(false);
+  }
+
+  function startPolling() {
+    const interval = setInterval(async () => {
+      const res = await fetch("/api/sync/status");
+      const data = await res.json();
+
+      if (data.ready) {
+        clearInterval(interval);
+        setSyncStatus("done");
+        shopify.toast.show("sync completed successfully");
+        loadProducts(1);
+      }
+    }, 5000);
+  }
+
+  // async function startSync() {
+  //   setSyncStatus("running");
+  //   await fetch("/api/sync/start");
+  //   startPolling();
+  // }
+  async function handleDeleteConfirmed() {
+    if (!selectedProduct?.productId) return;
+
+    const style = selectedProduct.style;
+    setRowLoading(style, true);
+
+    try {
+      const res = await fetch("/api/product/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: selectedProduct.productId }),
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        shopify.toast.show("Product deleted from Shopify");
+        await loadProducts(page);
+      } else {
+        shopify.toast.show("Delete failed");
+      }
+    } finally {
+      setRowLoading(style, false);
+      setSelectedProduct(null);
+    }
+  }
+  async function startSync() {
+    setSyncStatus("running");
+    setProducts([]);
+    setPage(1);
+    setTotalPages(1);
+    setLoadingProducts(true);
+
+    shopify.toast.show("Starting fresh sync...");
+
+    await fetch("/api/sync/start");
+    startPolling();
+  }
+  console.log(products, "products_____");
+  if (syncStatus === "checking") {
+    return (
+      <s-page heading="Inventory Sync">
+        <s-section>
+          <s-stack>
+            <s-paragraph>Checking sync status...</s-paragraph>
+          </s-stack>
+        </s-section>
+      </s-page>
+    );
+  }
+  return (
+    <s-page heading="Inventory Sync">
+
+      {/* Sync Section */}
+      {syncStatus === "done" ? (<s-grid alignItems="end" paddingBlock="base" justifyItems="end">
+        <s-grid-item>
+          <s-button variant="primary" onClick={startSync}>
+            Re-run Sync
+          </s-button>
+        </s-grid-item>
+      </s-grid>) : <s-section heading="Inventory Sync">
+        <s-stack>
+          <s-button
+            onClick={startSync}
+            disabled={syncStatus === "running"}
+            {...(syncStatus === "running" ? { loading: true } : {})}
+          >
+            {syncStatus === "running"
+              ? "Sync Running..." : "Re-run Sync"
+            }
+          </s-button>
+          {syncStatus === "running" && (
+            <s-paragraph>
+              Sync in progress. Please wait...
+            </s-paragraph>
+          )}
+
+          {/* {syncStatus === "done" && (
+            <s-paragraph>
+              Sync completed. Cached data ready.
+            </s-paragraph>
+          )} */}
+        </s-stack>
+      </s-section>}
+
+      {/* Products */}
+      {syncStatus === "done" && (
+        <s-section heading="Products">
+
+          {loadingProducts ? (
+            <ProductsSkeleton rows={10} />
+          ) : (
+            <>
+              <s-table loading={false}>
+                <s-table-header-row>
+                  <s-table-header>Title</s-table-header>
+                  <s-table-header>Style</s-table-header>
+                  <s-table-header>Category</s-table-header>
+                  <s-table-header format="numeric">Variants</s-table-header>
+                  <s-table-header format="numeric">Total Inventory</s-table-header>
+                  <s-table-header format="numeric">Action</s-table-header>
+                </s-table-header-row>
+
+                <s-table-body>
+                  {products?.map((p) => {
+                    const rowLoading = loadingMap[p.style] === true;
+
+                    return (
+                      <s-table-row key={p.style}>
+                        <s-table-cell>{p.title}</s-table-cell>
+                        <s-table-cell>{p.style}</s-table-cell>
+                        <s-table-cell>{p.category}</s-table-cell>
+                        <s-table-cell>{p.totalVariants}</s-table-cell>
+                        <s-table-cell>{p.totalInventory}</s-table-cell>
+
+                        <s-table-cell>
+                          {p.existsInStore ? (
+                            <s-button
+                              tone="critical"
+                              disabled={rowLoading}
+                              {...(rowLoading ? { loading: true } : {})}
+                              // onClick={async () => {
+                              //   if (!p.productId) return;
+
+                              //   const confirmDelete = confirm(
+                              //     `Are you sure you want to delete "${p.title}" from Shopify?`
+                              //   );
+                              //   if (!confirmDelete) return;
+
+                              //   setRowLoading(p.style, true);
+                              //   try {
+                              //     const res = await fetch("/api/product/delete", {
+                              //       method: "POST",
+                              //       headers: { "Content-Type": "application/json" },
+                              //       body: JSON.stringify({ productId: p.productId }),
+                              //     });
+
+                              //     const data = await res.json();
+
+                              //     if (data.success) {
+                              //       shopify.toast.show("Product deleted from Shopify");
+                              //       await loadProducts(page);
+                              //     } else {
+                              //       shopify.toast.show("Delete failed");
+                              //     }
+                              //   } finally {
+                              //     setRowLoading(p.style, false);
+                              //   }
+                              // }}
+                              commandFor="delete-modal"
+                              onClick={() => {
+                                if (!p.productId) return;
+                                setSelectedProduct(p);
+                              }}
+                            >
+                              Delete
+                            </s-button>
+                          ) : (
+                            <s-button
+                              tone="auto"
+                              disabled={rowLoading}
+                              {...(rowLoading ? { loading: true } : {})}
+                              onClick={async () => {
+                                setRowLoading(p.style, true);
+                                try {
+                                  await fetch("/api/products/add", {
+                                    method: "POST",
+                                    body: JSON.stringify({ style: p.style }),
+                                    headers: { "Content-Type": "application/json" },
+                                  });
+
+                                  shopify.toast.show("Product added to Shopify");
+                                  await loadProducts(page);
+                                } finally {
+                                  setRowLoading(p.style, false);
+                                }
+                              }}
+                            >
+                              Add
+                            </s-button>
+                          )}
+                        </s-table-cell>
+                      </s-table-row>
+                    );
+                  })}
+                </s-table-body>
+              </s-table>
+
+              {/* Pagination only after load */}
+              <s-stack
+                gap="base"
+                paddingBlockStart="base"
+                direction="inline"
+                alignItems="center"
+                justifyContent="end"
+              >
+                <s-button
+                  disabled={page === 1}
+                  onClick={() => loadProducts(page - 1)}
+                >
+                  Previous
+                </s-button>
+
+                <s-text>
+                  Page {page} / {totalPages}
+                </s-text>
+
+                <s-button
+                  disabled={page === totalPages}
+                  onClick={() => loadProducts(page + 1)}
+                >
+                  Next
+                </s-button>
+              </s-stack>
+            </>
+          )}
+
+        </s-section>
+      )}
+      <s-modal id="delete-modal" heading="Delete Product">
+        <s-paragraph>
+          Are you sure you want to delete "{selectedProduct?.title}" from Shopify?
+        </s-paragraph>
+
+        <s-button
+          slot="secondary-actions"
+          commandFor="delete-modal"
+          command="--hide"
+          onClick={() => {
+            setSelectedProduct(null);
+          }}
+        >
+          Cancel
+        </s-button>
+
+        <s-button
+          slot="primary-action"
+          variant="primary"
+          tone="critical"
+          commandFor="delete-modal"
+          command="--hide"
+          onClick={handleDeleteConfirmed}
+        >
+          Delete
+        </s-button>
+      </s-modal>
+    </s-page>
+  );
+}
+
+export const headers: HeadersFunction = (headersArgs) => {
+  return boundary.headers(headersArgs);
+};
+
+/* ================= STYLES ================= */
+
+const skeletonCard = {
+  padding: "16px",
+  borderRadius: "12px",
+  background: "#fff",
+  boxShadow: "0 1px 6px rgba(0,0,0,0.08)",
+};
+
+const skeletonRow = (header = false) => ({
+  display: "grid",
+  gridTemplateColumns: "2fr 1fr 2fr 1fr 1fr 1fr",
+  gap: "16px",
+  padding: "10px 0",
+  borderBottom: header ? "2px solid #e5e7eb" : "1px solid #e5e7eb",
+});
