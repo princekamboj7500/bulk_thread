@@ -333,7 +333,22 @@ export default function Index() {
 
                     return (
                       <s-table-row key={p.style}>
-                        <s-table-cell>{p.title}</s-table-cell>
+
+                        <s-table-cell>
+                          <s-stack direction="inline" gap="small-300"
+                            alignItems="center">
+                            <div style={{display: "flex", alignItems: "center", gap: "6px"}}>
+                              <s-box blockSize="40px" inlineSize="40px">
+                                <s-image
+                                  objectFit="cover"
+                                  alt="Ocean Sunset puzzle thumbnail"
+                                  src={p?.image}
+                                />
+                              </s-box>
+                              <s-paragraph lineClamp={1}>{p.title}</s-paragraph>
+                            </div>
+                          </s-stack>
+                        </s-table-cell>
                         <s-table-cell>{p.style}</s-table-cell>
                         <s-table-cell>{p.category}</s-table-cell>
                         <s-table-cell>{p.totalVariants}</s-table-cell>

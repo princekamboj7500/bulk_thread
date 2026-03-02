@@ -1,7 +1,6 @@
 import fs from "fs";
 import path from "path";
 import Papa from "papaparse";
-import unzipper from "unzipper";
 
 const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
 const CSV_FILE = path.join(process.cwd(), "SanMar_EPDD.csv");
@@ -24,7 +23,7 @@ export async function downloadSanmarCSV(options?: { force?: boolean }) {
 
   const SftpClient = (await import("ssh2-sftp-client")).default;
   // const AdmZip = (await import("adm-zip")).default;
-
+  const unzipper = await import("unzipper");
   const sftp = new SftpClient();
 
   console.log("Connecting to SanMar SFTP...");

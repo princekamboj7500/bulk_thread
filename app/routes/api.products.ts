@@ -41,6 +41,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         category: row["CATEGORY_NAME"],
         totalVariants: 0,
         totalInventory: 0,
+        image:
+          row["FRONT_MODEL_IMAGE_URL"] ||
+          (row["PRODUCT_IMAGE"]
+            ? `https://cdnm.sanmar.com/imglib/mresjpg/${row["PRODUCT_IMAGE"]}`
+            : null),
       });
     }
 
