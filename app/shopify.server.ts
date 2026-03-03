@@ -81,7 +81,7 @@ const shopify = shopifyApp({
   hooks: {
     afterAuth: async ({ session }) => {
       console.log(`App installed for shop: ${session.shop}`);
-
+      console.log(session,"session_____");
       try {
         if (!session.isOnline) {
           const filePath = path.join(
