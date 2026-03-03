@@ -574,26 +574,26 @@ async function run() {
     await downloadSanmarCSV({ force: true });
 
     // ✅ READ SESSIONS FROM JSON FILE (Prisma removed)
-    if (!fs.existsSync(SESSION_FILE)) {
-      console.log("No offline session file found.");
-      process.exit(0);
-    }
+    // if (!fs.existsSync(SESSION_FILE)) {
+    //   console.log("No offline session file found.");
+    //   process.exit(0);
+    // }
 
-    const sessions = JSON.parse(
-      fs.readFileSync(SESSION_FILE, "utf-8")
-    );
+    // const sessions = JSON.parse(
+    //   fs.readFileSync(SESSION_FILE, "utf-8")
+    // );
 
-    if (!sessions.length) {
-      console.log("No installed shops found.");
-      process.exit(0);
-    }
+    // if (!sessions.length) {
+    //   console.log("No installed shops found.");
+    //   process.exit(0);
+    // }
 
-    console.log(`Found ${sessions.length} shop(s)`);
+    // console.log(`Found ${sessions.length} shop(s)`);
 
-    for (const session of sessions) {
-      await runForShop(session.shop, session.accessToken, CACHE_FILE);
-    }
-
+    // for (const session of sessions) {
+    //   await runForShop("bulkthreads.myshopify.com", "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", CACHE_FILE);
+    // }
+    await runForShop("bulkthreads.myshopify.com", "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", CACHE_FILE);
     console.log("Full nightly sync completed.");
     process.exit(0);
   } catch (err) {
