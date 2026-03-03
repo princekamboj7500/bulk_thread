@@ -3,13 +3,132 @@
 // import path from "path";
 // import readline from "readline";
 // import { fileURLToPath } from "url";
-// import {downloadSanmarCSV} from "../app/lib/sanmar.server.js"
+// import Papa from "papaparse";
+// import SftpClient from "ssh2-sftp-client";
+// import unzipper from "unzipper";
 
-// // ESM dirname fix
+// /* ------------------ ESM dirname fix ------------------ */
 // const __filename = fileURLToPath(import.meta.url);
 // const __dirname = path.dirname(__filename);
 
 // const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
+// const CSV_FILE = path.join(process.cwd(), "SanMar_EPDD.csv");
+// const ZIP_FILE = path.join(process.cwd(), "SanMar_EPDD.zip");
+
+// /* =======================================================
+//    DOWNLOAD SANMAR CSV (MERGED HERE - NO LOGIC CHANGED)
+// ======================================================= */
+// async function downloadSanmarCSV(options = {}) {
+//   const force = options?.force === true;
+
+//   if (!force && fs.existsSync(CACHE_FILE)) {
+//     console.log("Using cached SanMar data...");
+//     return true;
+//   }
+
+//   if (force) {
+//     console.log("Force sync enabled → clearing old cache...");
+//     if (fs.existsSync(CACHE_FILE)) fs.unlinkSync(CACHE_FILE);
+//     if (fs.existsSync(CSV_FILE)) fs.unlinkSync(CSV_FILE);
+//     if (fs.existsSync(ZIP_FILE)) fs.unlinkSync(ZIP_FILE);
+//   }
+
+//   const sftp = new SftpClient();
+
+//   console.log("Connecting to SanMar SFTP...");
+
+//   await sftp.connect({
+//     host: process.env.FTP_DOMAIN_SANMAR,
+//     username: process.env.FTP_USERNAME_SANMAR,
+//     password: process.env.FTP_PASSWORD_SANMAR,
+//     port: 2200,
+//     readyTimeout: 60000,
+//   });
+
+//   console.log("Downloading EPDD zip to disk...");
+//   await sftp.fastGet("/SanMarPDD/SanMar_EPDD_csv.zip", ZIP_FILE);
+//   await sftp.end();
+
+//   console.log("Unzipping CSV from disk...");
+
+//   await new Promise((resolve, reject) => {
+//     fs.createReadStream(ZIP_FILE)
+//       .pipe(unzipper.Parse())
+//       .on("entry", (entry) => {
+//         const fileName = entry.path.toLowerCase();
+
+//         if (fileName.endsWith(".csv")) {
+//           entry
+//             .pipe(fs.createWriteStream(CSV_FILE))
+//             .on("finish", resolve)
+//             .on("error", reject);
+//         } else {
+//           entry.autodrain();
+//         }
+//       })
+//       .on("error", reject);
+//   });
+
+//   if (fs.existsSync(ZIP_FILE)) fs.unlinkSync(ZIP_FILE);
+
+//   console.log("Parsing CSV → streaming to cache...");
+
+//   return new Promise((resolve, reject) => {
+//     const fileStream = fs.createReadStream(CSV_FILE);
+//     const writeStream = fs.createWriteStream(CACHE_FILE);
+
+//     writeStream.write("[\n");
+
+//     let buffer = [];
+//     let count = 0;
+//     const BATCH_SIZE = 500;
+//     let isFirstRow = true;
+
+//     function flushBuffer() {
+//       if (buffer.length === 0) return;
+
+//       const chunk = (isFirstRow ? "" : ",\n") + buffer.join(",\n");
+
+//       buffer = [];
+//       isFirstRow = false;
+
+//       if (!writeStream.write(chunk)) {
+//         fileStream.pause();
+//         writeStream.once("drain", () => fileStream.resume());
+//       }
+//     }
+
+//     Papa.parse(fileStream, {
+//       header: true,
+//       skipEmptyLines: true,
+
+//       step: (result) => {
+//         const json = JSON.stringify(result.data);
+//         buffer.push(json);
+//         count++;
+
+//         if (buffer.length >= BATCH_SIZE) {
+//           flushBuffer();
+//         }
+//       },
+
+//       complete: () => {
+//         flushBuffer();
+
+//         writeStream.write("\n]");
+//         writeStream.end(() => {
+//           console.log(`Parsed ${count} rows & cache rebuilt`);
+//           resolve(true);
+//         });
+//       },
+
+//       error: (err) => {
+//         console.error("CSV Parsing Error:", err);
+//         reject(err);
+//       },
+//     });
+//   });
+// }
 
 // /* ------------------ Shopify GraphQL Helper ------------------ */
 // async function shopifyGraphQL(shop, token, query, variables = {}) {
@@ -45,9 +164,7 @@
 
 //     try {
 //       result.push(JSON.parse(clean));
-//     } catch {
-//       // ignore malformed
-//     }
+//     } catch {}
 //   }
 
 //   return result;
@@ -55,7 +172,7 @@
 
 // /* ------------------ Inventory Sync ------------------ */
 // async function runForShop(shop, accessToken, jsonData) {
-//   console.log(`Starting inventory sync for shop:: ${shop}`);
+//   console.log(`Starting inventory sync for shop: ${shop}`);
 
 //   const locRes = await shopifyGraphQL(
 //     shop,
@@ -71,7 +188,7 @@
 //           }
 //         }
 //       }
-//     `,
+//     `
 //   );
 
 //   const locationId = locRes.locations.edges[0].node.id;
@@ -115,7 +232,7 @@
 //             }
 //           }
 //         `,
-//         { query: `product_type:${style}` },
+//         { query: `product_type:${style}` }
 //       );
 
 //       productCache[style] = productRes.products.edges;
@@ -152,7 +269,7 @@
 //                 ],
 //                 reason: "correction",
 //               },
-//             },
+//             }
 //           );
 //         }
 //       }
@@ -174,7 +291,6 @@
 //     const jsonData = await readLargeJsonArray(CACHE_FILE);
 //     console.log(`Total rows: ${jsonData.length}`);
 
-//     // STEP 2 — Load Prisma
 //     const prismaModule = await import(
 //       new URL("./prisma.client.js", import.meta.url).href
 //     );
@@ -208,6 +324,7 @@
 
 
 
+
 import "dotenv/config";
 import fs from "fs";
 import path from "path";
@@ -226,7 +343,7 @@ const CSV_FILE = path.join(process.cwd(), "SanMar_EPDD.csv");
 const ZIP_FILE = path.join(process.cwd(), "SanMar_EPDD.zip");
 
 /* =======================================================
-   DOWNLOAD SANMAR CSV (MERGED HERE - NO LOGIC CHANGED)
+   DOWNLOAD SANMAR CSV (UNCHANGED)
 ======================================================= */
 async function downloadSanmarCSV(options = {}) {
   const force = options?.force === true;
@@ -255,18 +372,17 @@ async function downloadSanmarCSV(options = {}) {
     readyTimeout: 60000,
   });
 
-  console.log("Downloading EPDD zip to disk...");
+  console.log("Downloading EPDD zip...");
   await sftp.fastGet("/SanMarPDD/SanMar_EPDD_csv.zip", ZIP_FILE);
   await sftp.end();
 
-  console.log("Unzipping CSV from disk...");
+  console.log("Unzipping CSV...");
 
   await new Promise((resolve, reject) => {
     fs.createReadStream(ZIP_FILE)
       .pipe(unzipper.Parse())
       .on("entry", (entry) => {
         const fileName = entry.path.toLowerCase();
-
         if (fileName.endsWith(".csv")) {
           entry
             .pipe(fs.createWriteStream(CSV_FILE))
@@ -281,7 +397,7 @@ async function downloadSanmarCSV(options = {}) {
 
   if (fs.existsSync(ZIP_FILE)) fs.unlinkSync(ZIP_FILE);
 
-  console.log("Parsing CSV → streaming to cache...");
+  console.log("Building JSON cache (streamed)...");
 
   return new Promise((resolve, reject) => {
     const fileStream = fs.createReadStream(CSV_FILE);
@@ -295,10 +411,8 @@ async function downloadSanmarCSV(options = {}) {
     let isFirstRow = true;
 
     function flushBuffer() {
-      if (buffer.length === 0) return;
-
+      if (!buffer.length) return;
       const chunk = (isFirstRow ? "" : ",\n") + buffer.join(",\n");
-
       buffer = [];
       isFirstRow = false;
 
@@ -311,31 +425,20 @@ async function downloadSanmarCSV(options = {}) {
     Papa.parse(fileStream, {
       header: true,
       skipEmptyLines: true,
-
       step: (result) => {
-        const json = JSON.stringify(result.data);
-        buffer.push(json);
+        buffer.push(JSON.stringify(result.data));
         count++;
-
-        if (buffer.length >= BATCH_SIZE) {
-          flushBuffer();
-        }
+        if (buffer.length >= BATCH_SIZE) flushBuffer();
       },
-
       complete: () => {
         flushBuffer();
-
         writeStream.write("\n]");
         writeStream.end(() => {
           console.log(`Parsed ${count} rows & cache rebuilt`);
           resolve(true);
         });
       },
-
-      error: (err) => {
-        console.error("CSV Parsing Error:", err);
-        reject(err);
-      },
+      error: reject,
     });
   });
 }
@@ -356,15 +459,10 @@ async function shopifyGraphQL(shop, token, query, variables = {}) {
   return json.data;
 }
 
-/* ------------------ Streaming JSON Reader ------------------ */
-async function readLargeJsonArray(filePath) {
+/* ------------------ STREAM PROCESSOR (NEW) ------------------ */
+async function processLargeJsonFile(filePath, callback) {
   const stream = fs.createReadStream(filePath, { encoding: "utf-8" });
-  const rl = readline.createInterface({
-    input: stream,
-    crlfDelay: Infinity,
-  });
-
-  const result = [];
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
   for await (const line of rl) {
     const trimmed = line.trim();
@@ -373,15 +471,14 @@ async function readLargeJsonArray(filePath) {
     const clean = trimmed.replace(/,$/, "");
 
     try {
-      result.push(JSON.parse(clean));
+      const parsed = JSON.parse(clean);
+      await callback(parsed);
     } catch {}
   }
-
-  return result;
 }
 
 /* ------------------ Inventory Sync ------------------ */
-async function runForShop(shop, accessToken, jsonData) {
+async function runForShop(shop, accessToken, filePath) {
   console.log(`Starting inventory sync for shop: ${shop}`);
 
   const locRes = await shopifyGraphQL(
@@ -406,12 +503,12 @@ async function runForShop(shop, accessToken, jsonData) {
 
   const productCache = {};
 
-  for (const item of jsonData) {
+  await processLargeJsonFile(filePath, async (item) => {
     const style = item["STYLE#"];
     const inventoryKey = item["INVENTORY_KEY"];
     const qty = parseInt(item["QTY"] || "0");
 
-    if (!style || !inventoryKey) continue;
+    if (!style || !inventoryKey) return;
 
     if (!productCache[style]) {
       console.log(`Fetching products for style: ${style}`);
@@ -484,7 +581,7 @@ async function runForShop(shop, accessToken, jsonData) {
         }
       }
     }
-  }
+  });
 
   console.log(`Inventory sync completed for shop: ${shop}`);
 }
@@ -496,10 +593,6 @@ async function run() {
 
     console.log("⬇ Downloading Sanmar CSV...");
     await downloadSanmarCSV({ force: true });
-
-    console.log("Reading cache file...");
-    const jsonData = await readLargeJsonArray(CACHE_FILE);
-    console.log(`Total rows: ${jsonData.length}`);
 
     const prismaModule = await import(
       new URL("./prisma.client.js", import.meta.url).href
@@ -519,7 +612,7 @@ async function run() {
     console.log(`Found ${sessions.length} shop(s)`);
 
     for (const session of sessions) {
-      await runForShop(session.shop, session.accessToken, jsonData);
+      await runForShop(session.shop, session.accessToken, CACHE_FILE);
     }
 
     console.log("Full nightly sync completed.");
