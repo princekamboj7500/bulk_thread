@@ -4,11 +4,16 @@ import path from "path";
 import readline from "readline";
 import { fileURLToPath } from "url";
 
-// ESM dirname fix
+/* ------------------ Path Setup ------------------ */
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
+// Project root
+const ROOT_DIR = path.resolve(__dirname, "..");
+
+// Cache file always root me
+const CACHE_FILE = path.join(ROOT_DIR, "sanmar-cache.json");
 
 /* ------------------ Shopify GraphQL Helper ------------------ */
 
@@ -34,6 +39,7 @@ async function shopifyGraphQL(shop, token, query, variables = {}) {
 
 async function readLargeJsonArray(filePath) {
   const stream = fs.createReadStream(filePath, { encoding: "utf-8" });
+
   const rl = readline.createInterface({
     input: stream,
     crlfDelay: Infinity,
@@ -46,10 +52,11 @@ async function readLargeJsonArray(filePath) {
     if (!trimmed || trimmed === "[" || trimmed === "]") continue;
 
     const clean = trimmed.replace(/,$/, "");
+
     try {
       result.push(JSON.parse(clean));
     } catch {
-      // ignore malformed
+      // ignore malformed lines
     }
   }
 
@@ -95,7 +102,6 @@ async function runForShop(shop, accessToken, jsonData) {
             edges {
               node {
                 id
-                productType
                 variants(first: 100) {
                   edges {
                     node {
@@ -160,22 +166,33 @@ async function run() {
   try {
     console.log(" Starting full nightly sync...");
 
-    // STEP 1 — Download latest Sanmar data
-    const { downloadSanmarCSV } = await import(
-      new URL("../app/lib/sanmar.server.js", import.meta.url).href
+    /* STEP 1 — Import downloader safely using absolute path */
+    const downloaderPath = path.join(
+      ROOT_DIR,
+      "app",
+      "lib",
+      "sanmar.server.js"
     );
 
-    console.log("⬇ Downloading Sanmar CSV...");
+    const { downloadSanmarCSV } = await import(
+      `file://${downloaderPath}`
+    );
+
+    console.log(" Downloading Sanmar CSV...");
     await downloadSanmarCSV({ force: true });
 
     console.log(" Reading cache file...");
     const jsonData = await readLargeJsonArray(CACHE_FILE);
     console.log(` Total rows: ${jsonData.length}`);
 
-    // STEP 2 — Load Prisma
-    const prismaModule = await import(
-      new URL("./prisma.client.js", import.meta.url).href
+    /* STEP 2 — Load Prisma safely */
+    const prismaPath = path.join(
+      ROOT_DIR,
+      "scripts",
+      "prisma.client.js"
     );
+
+    const prismaModule = await import(`file://${prismaPath}`);
     const prisma = prismaModule.default;
 
     console.log(" Fetching offline sessions...");
