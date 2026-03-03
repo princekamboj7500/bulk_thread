@@ -1,32 +1,37 @@
 import "dotenv/config";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 import readline from "readline";
+import { fileURLToPath } from "url";
 
-// Resolve __dirname in ESM
+// ESM dirname fix
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Root cache file
 const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
 
+/* ------------------ Shopify GraphQL Helper ------------------ */
+
 async function shopifyGraphQL(shop, token, query, variables = {}) {
-  const res = await fetch(`https://${shop}/admin/api/2024-01/graphql.json`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Shopify-Access-Token": token,
-    },
-    body: JSON.stringify({ query, variables }),
-  });
+  const res = await fetch(
+    `https://${shop}/admin/api/2024-01/graphql.json`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": token,
+      },
+      body: JSON.stringify({ query, variables }),
+    }
+  );
 
   const json = await res.json();
   if (json.errors) throw new Error(JSON.stringify(json.errors));
   return json.data;
 }
 
-//  STREAMING JSON READER (memory safe)
+/* ------------------ Streaming JSON Reader ------------------ */
+
 async function readLargeJsonArray(filePath) {
   const stream = fs.createReadStream(filePath, { encoding: "utf-8" });
   const rl = readline.createInterface({
@@ -38,26 +43,24 @@ async function readLargeJsonArray(filePath) {
 
   for await (const line of rl) {
     const trimmed = line.trim();
-
-    // Skip brackets or empty lines
     if (!trimmed || trimmed === "[" || trimmed === "]") continue;
 
-    const clean = trimmed.replace(/,$/, ""); // remove trailing comma
-
+    const clean = trimmed.replace(/,$/, "");
     try {
       result.push(JSON.parse(clean));
     } catch {
-      // ignore malformed line
+      // ignore malformed
     }
   }
 
   return result;
 }
 
+/* ------------------ Inventory Sync ------------------ */
+
 async function runForShop(shop, accessToken, jsonData) {
   console.log(` Starting inventory sync for shop: ${shop}`);
 
-  // Get location id
   const locRes = await shopifyGraphQL(
     shop,
     accessToken,
@@ -118,7 +121,7 @@ async function runForShop(shop, accessToken, jsonData) {
     for (const p of products) {
       for (const v of p.node.variants.edges) {
         if (v.node.sku === inventoryKey) {
-          console.log(`🛠 ${shop} → SKU ${inventoryKey} => ${qty}`);
+          console.log(` ${shop} → SKU ${inventoryKey} => ${qty}`);
 
           await shopifyGraphQL(
             shop,
@@ -151,45 +154,51 @@ async function runForShop(shop, accessToken, jsonData) {
   console.log(` Inventory sync completed for shop: ${shop}`);
 }
 
+/* ------------------ Main Runner ------------------ */
+
 async function run() {
   try {
-    console.log(" Loading Sanmar cache file (streaming mode)...");
+    console.log(" Starting full nightly sync...");
 
-    //  Only changed logic (stream read)
+    // STEP 1 — Download latest Sanmar data
+    const { downloadSanmarCSV } = await import(
+      new URL("../app/lib/sanmar.server.js", import.meta.url).href
+    );
+
+    console.log("⬇ Downloading Sanmar CSV...");
+    await downloadSanmarCSV({ force: true });
+
+    console.log(" Reading cache file...");
     const jsonData = await readLargeJsonArray(CACHE_FILE);
+    console.log(` Total rows: ${jsonData.length}`);
 
-    console.log(` Total variant rows: ${jsonData.length}`);
-
-    // Dynamically load Prisma client (UNCHANGED)
+    // STEP 2 — Load Prisma
     const prismaModule = await import(
       new URL("./prisma.client.js", import.meta.url).href
     );
     const prisma = prismaModule.default;
 
-    console.log(" Fetching all offline sessions (installed shops)...");
+    console.log(" Fetching offline sessions...");
     const sessions = await prisma.session.findMany({
       where: { isOnline: false },
     });
 
     if (!sessions.length) {
       console.log(" No installed shops found.");
-      return;
+      process.exit(0);
     }
 
-    console.log(`Found ${sessions.length} shop(s)`);
+    console.log(` Found ${sessions.length} shop(s)`);
 
     for (const session of sessions) {
-      try {
-        await runForShop(session.shop, session.accessToken, jsonData);
-      } catch (err) {
-        console.error(` Failed for shop ${session.shop}:`, err);
-      }
+      await runForShop(session.shop, session.accessToken, jsonData);
     }
 
-    console.log(" All shops inventory sync completed.");
+    console.log(" Full nightly sync completed.");
     process.exit(0);
+
   } catch (err) {
-    console.error("Fatal error:", err);
+    console.error(" Nightly sync failed:", err);
     process.exit(1);
   }
 }
