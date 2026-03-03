@@ -55,7 +55,7 @@ async function readLargeJsonArray(filePath) {
 
 /* ------------------ Inventory Sync ------------------ */
 async function runForShop(shop, accessToken, jsonData) {
-  console.log(`Starting inventory sync for shop: ${shop}`);
+  console.log(`Starting inventory sync for shop:: ${shop}`);
 
   const locRes = await shopifyGraphQL(
     shop,
