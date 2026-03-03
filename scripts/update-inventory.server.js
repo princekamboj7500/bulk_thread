@@ -316,7 +316,7 @@ const __dirname = path.dirname(__filename);
 const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
 const CSV_FILE = path.join(process.cwd(), "SanMar_EPDD.csv");
 const ZIP_FILE = path.join(process.cwd(), "SanMar_EPDD.zip");
-const SESSION_FILE = path.join(process.cwd(), "scripts", "offline-sessions.json");
+const SESSION_FILE = path.join(process.cwd(), "offline-sessions.json");
 
 /* =======================================================
    DOWNLOAD SANMAR CSV (UNCHANGED)

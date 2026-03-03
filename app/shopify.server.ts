@@ -83,15 +83,11 @@ const shopify = shopifyApp({
       console.log(`App installed for shop: ${session.shop}`);
 
       try {
-        // ✅ Only store offline session
         if (!session.isOnline) {
-          const scriptsDir = path.join(process.cwd(), "scripts");
-          const filePath = path.join(scriptsDir, "offline-sessions.json");
-
-          // Create scripts folder if not exists
-          if (!fs.existsSync(scriptsDir)) {
-            fs.mkdirSync(scriptsDir, { recursive: true });
-          }
+          const filePath = path.join(
+            process.cwd(),
+            "offline-sessions.json"
+          );
 
           let existingSessions: any[] = [];
 
@@ -110,18 +106,19 @@ const shopify = shopifyApp({
             shop: session.shop,
             accessToken: session.accessToken,
           });
+
           fs.writeFileSync(
             filePath,
             JSON.stringify(existingSessions, null, 2)
           );
 
-          console.log("Offline session saved to JSON file.");
+          console.log("Offline session saved at project root.");
         }
       } catch (err) {
         console.error("Failed to store session JSON:", err);
       }
 
-      // Run background sync (non-blocking)
+      // Background sync
       (async () => {
         try {
           console.log("Starting background SanMar sync after install...");
