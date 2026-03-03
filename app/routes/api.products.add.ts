@@ -3,7 +3,7 @@ import path from "path";
 import readline from "readline";
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
-
+import he from "he";
 const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -161,12 +161,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       {
         variables: {
           input: {
-            title: baseProduct["PRODUCT_TITLE"],
-            handle: `sanmar-${style}`,
+            title: he.decode(baseProduct["PRODUCT_TITLE"] || ""),
             vendor: baseProduct["MILL"],
             category: categoryId,
-            productType: baseProduct["CATEGORY_NAME"],
-            descriptionHtml: baseProduct["PRODUCT_DESCRIPTION"] || "",
+            productType: style,
+            descriptionHtml: he.decode(baseProduct["PRODUCT_DESCRIPTION"] || ""),
             tags: [style],
             metafields: [
               {
@@ -472,7 +471,49 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         { variables: { productId, variants: variantAssignments } }
       );
     }
+    /* STEP 7: PUBLISH PRODUCT USING ENV ARRAY */
 
+    let publicationIds: string[] = [];
+
+    try {
+      publicationIds = JSON.parse(
+        process.env.SHOPIFY_PUBLICATION_IDS || "[]"
+      );
+    } catch (err) {
+      console.error("Invalid SHOPIFY_PUBLICATION_IDS format in env");
+    }
+
+    if (!publicationIds.length) {
+      console.warn("No publication IDs configured");
+    } else {
+      const publishInputs = publicationIds.map((id) => ({
+        publicationId: id,
+      }));
+
+      const publishRes = await admin.graphql(
+        `#graphql
+    mutation publishProduct($id: ID!, $input: [PublicationInput!]!) {
+      publishablePublish(id: $id, input: $input) {
+        userErrors { field message }
+      }
+    }`,
+        {
+          variables: {
+            id: productId,
+            input: publishInputs,
+          },
+        }
+      );
+
+      const publishJson = await publishRes.json();
+      const publishErrors = publishJson?.data?.publishablePublish?.userErrors;
+
+      if (publishErrors?.length) {
+        console.error("Publish Errors:", publishErrors);
+      } else {
+        console.log("Product published successfully");
+      }
+    }
     return Response.json({ success: true, productId });
   } catch (error) {
     return Response.json(

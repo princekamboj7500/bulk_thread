@@ -3,6 +3,7 @@ import path from "path";
 import readline from "readline";
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
+import he from "he";
 
 const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
 const PAGE_SIZE = 50;
@@ -37,7 +38,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     if (!map.has(style)) {
       map.set(style, {
         style,
-        title: row["PRODUCT_TITLE"],
+        title: he.decode(row["PRODUCT_TITLE"]),
         category: row["CATEGORY_NAME"],
         totalVariants: 0,
         totalInventory: 0,
@@ -60,12 +61,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const start = (page - 1) * PAGE_SIZE;
   const paginated = grouped.slice(start, start + PAGE_SIZE);
 
-  // Build handle query
-  // const handles = paginated.map((p) => `sanmar-${p.style}`);
-  const handles = paginated.map((p) => `sanmar-${String(p.style).toLowerCase()}`);
-  const searchQuery = handles.map((h) => `handle:${h}`).join(" OR ");
+  // 🔥 MATCH USING product_type INSTEAD OF HANDLE
+  const styles = paginated.map((p) => String(p.style));
+  const searchQuery = styles.map((s) => `product_type:${s}`).join(" OR ");
 
-  let handleToIdMap: Record<string, string> = {};
+  let typeToIdMap: Record<string, string> = {};
 
   if (searchQuery) {
     const res = await admin.graphql(
@@ -75,7 +75,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           edges {
             node {
               id
-              handle
+              productType
             }
           }
         }
@@ -86,18 +86,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     );
 
     const json = await res.json();
-
     const edges = json?.data?.products?.edges || [];
-    handleToIdMap = edges.reduce((acc: any, edge: any) => {
-      acc[edge.node.handle] = edge.node.id;
+
+    typeToIdMap = edges.reduce((acc: any, edge: any) => {
+      acc[edge.node.productType] = edge.node.id;
       return acc;
     }, {});
   }
 
   const finalProducts = paginated.map((p) => {
-    // const handle = `sanmar-${p.style}`;
-    const handle = `sanmar-${String(p.style).toLowerCase()}`;
-    const productId = handleToIdMap[handle] || null;
+    const productId = typeToIdMap[String(p.style)] || null;
 
     return {
       ...p,
