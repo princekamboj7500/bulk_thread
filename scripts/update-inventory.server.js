@@ -337,8 +337,8 @@ async function getAccessToken(domain) {
       grant_type: "client_credentials",
     }),
   });
-
-  const tokenJson = await tokenRes.json();
+  const tokenJson = await tokenRes?.json();
+  console.log(tokenJson,"tokenJson_______");
 
   if (!tokenJson?.access_token) {
     throw new Error("Failed to get Shopify access token");
