@@ -324,7 +324,7 @@ const CLIENT_SECRET = process.env.SHOPIFY_API_SECRET;
 /* =======================================================
    GET ACCESS TOKEN FROM SHOPIFY
 ======================================================= */
-
+console.log(SHOP, CLIENT_ID, CLIENT_SECRET, "details_____");
 async function getAccessToken(domain) {
   console.log("Requesting Shopify access token...");
 
