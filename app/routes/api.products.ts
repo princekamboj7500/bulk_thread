@@ -4,12 +4,15 @@ import readline from "readline";
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import he from "he";
+import prisma from "app/db.server";
 
 const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
 const PAGE_SIZE = 50;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
+  const adminToken = await prisma.session.findMany()
+  console.log(adminToken, "adminToken")
 
   const url = new URL(request.url);
   const page = parseInt(url.searchParams.get("page") || "1", 10);
