@@ -591,9 +591,10 @@ async function run() {
     // console.log(`Found ${sessions.length} shop(s)`);
 
     // for (const session of sessions) {
-    //   await runForShop("bulkthreads.myshopify.com", "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", CACHE_FILE);
+    //   await runForShop(session.shop, session.accessToken, CACHE_FILE);
     // }
-    await runForShop("bulkthreads.myshopify.com", "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", CACHE_FILE);
+    await runForShop(`${process.env.SHOPIFY_STORE}.myshopify.com`, process.env.SHOPIFY_ACCESS_TOKEN, CACHE_FILE);
+
     console.log("Full nightly sync completed.");
     process.exit(0);
   } catch (err) {
