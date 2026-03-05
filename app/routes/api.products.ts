@@ -11,9 +11,6 @@ const PAGE_SIZE = 50;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
-  const adminToken = await prisma.session.findMany()
-  console.log(adminToken, "adminToken")
-
   const url = new URL(request.url);
   const page = parseInt(url.searchParams.get("page") || "1", 10);
   const search = (url.searchParams.get("search") || "").toLowerCase();

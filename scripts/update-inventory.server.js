@@ -14,10 +14,8 @@
 // const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
 // const CSV_FILE = path.join(process.cwd(), "SanMar_EPDD.csv");
 // const ZIP_FILE = path.join(process.cwd(), "SanMar_EPDD.zip");
+// const SESSION_FILE = path.join(process.cwd(), "offline-sessions.json");
 
-// /* =======================================================
-//    DOWNLOAD SANMAR CSV (UNCHANGED)
-// ======================================================= */
 // async function downloadSanmarCSV(options = {}) {
 //   const force = options?.force === true;
 
@@ -132,7 +130,7 @@
 //   return json.data;
 // }
 
-// /* ------------------ STREAM PROCESSOR (NEW) ------------------ */
+// /* ------------------ STREAM PROCESSOR ------------------ */
 // async function processLargeJsonFile(filePath, callback) {
 //   const stream = fs.createReadStream(filePath, { encoding: "utf-8" });
 //   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -267,26 +265,27 @@
 //     console.log("⬇ Downloading Sanmar CSV...");
 //     await downloadSanmarCSV({ force: true });
 
-//     const prismaModule = await import(
-//       new URL("./prisma.client.js", import.meta.url).href
-//     );
-//     const prisma = prismaModule.default;
+//     // ✅ READ SESSIONS FROM JSON FILE (Prisma removed)
+//     // if (!fs.existsSync(SESSION_FILE)) {
+//     //   console.log("No offline session file found.");
+//     //   process.exit(0);
+//     // }
 
-//     console.log("Fetching offline sessions...");
-//     const sessions = await prisma.session.findMany({
-//       where: { isOnline: false },
-//     });
+//     // const sessions = JSON.parse(
+//     //   fs.readFileSync(SESSION_FILE, "utf-8")
+//     // );
 
-//     if (!sessions.length) {
-//       console.log("No installed shops found.");
-//       process.exit(0);
-//     }
+//     // if (!sessions.length) {
+//     //   console.log("No installed shops found.");
+//     //   process.exit(0);
+//     // }
 
-//     console.log(`Found ${sessions.length} shop(s)`);
+//     // console.log(`Found ${sessions.length} shop(s)`);
 
-//     for (const session of sessions) {
-//       await runForShop(session.shop, session.accessToken, CACHE_FILE);
-//     }
+//     // for (const session of sessions) {
+//     //   await runForShop(session.shop, session.accessToken, CACHE_FILE);
+//     // }
+//     await runForShop(`${process.env.SHOPIFY_STORE}.myshopify.com`, process.env.SHOPIFY_ACCESS_TOKEN, CACHE_FILE);
 
 //     console.log("Full nightly sync completed.");
 //     process.exit(0);
@@ -297,7 +296,6 @@
 // }
 
 // run();
-
 
 
 import "dotenv/config";
@@ -316,13 +314,44 @@ const __dirname = path.dirname(__filename);
 const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
 const CSV_FILE = path.join(process.cwd(), "SanMar_EPDD.csv");
 const ZIP_FILE = path.join(process.cwd(), "SanMar_EPDD.zip");
-const SESSION_FILE = path.join(process.cwd(), "offline-sessions.json");
+
+/* ------------------ ENV ------------------ */
+
+const SHOP = `${process.env.SHOPIFY_STORE}.myshopify.com`;
+const CLIENT_ID = process.env.SHOPIFY_API_KEY;
+const CLIENT_SECRET = process.env.SHOPIFY_API_SECRET;
+
+/* =======================================================
+   GET ACCESS TOKEN FROM SHOPIFY
+======================================================= */
+
+async function getAccessToken(domain) {
+  console.log("Requesting Shopify access token...");
+
+  const tokenRes = await fetch(`https://${domain}/admin/oauth/access_token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+      grant_type: "client_credentials",
+    }),
+  });
+
+  const tokenJson = await tokenRes.json();
+
+  if (!tokenJson?.access_token) {
+    throw new Error("Failed to get Shopify access token");
+  }
+
+  console.log("Access token received");
+
+  return tokenJson.access_token;
+}
 
 /* =======================================================
    DOWNLOAD SANMAR CSV (UNCHANGED)
 ======================================================= */
-// ✅ SAME AS YOUR EXISTING VERSION (NO CHANGE)
-// (keeping your exact function untouched)
 
 async function downloadSanmarCSV(options = {}) {
   const force = options?.force === true;
@@ -423,6 +452,7 @@ async function downloadSanmarCSV(options = {}) {
 }
 
 /* ------------------ Shopify GraphQL Helper ------------------ */
+
 async function shopifyGraphQL(shop, token, query, variables = {}) {
   const res = await fetch(`https://${shop}/admin/api/2024-01/graphql.json`, {
     method: "POST",
@@ -434,11 +464,14 @@ async function shopifyGraphQL(shop, token, query, variables = {}) {
   });
 
   const json = await res.json();
+
   if (json.errors) throw new Error(JSON.stringify(json.errors));
+
   return json.data;
 }
 
 /* ------------------ STREAM PROCESSOR ------------------ */
+
 async function processLargeJsonFile(filePath, callback) {
   const stream = fs.createReadStream(filePath, { encoding: "utf-8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -457,6 +490,7 @@ async function processLargeJsonFile(filePath, callback) {
 }
 
 /* ------------------ Inventory Sync ------------------ */
+
 async function runForShop(shop, accessToken, filePath) {
   console.log(`Starting inventory sync for shop: ${shop}`);
 
@@ -464,21 +498,20 @@ async function runForShop(shop, accessToken, filePath) {
     shop,
     accessToken,
     `
-      {
-        locations(first: 1) {
-          edges {
-            node {
-              id
-              name
-            }
+    {
+      locations(first: 1) {
+        edges {
+          node {
+            id
+            name
           }
         }
       }
-    `
+    }
+  `
   );
 
   const locationId = locRes.locations.edges[0].node.id;
-  console.log(`Location: ${locRes.locations.edges[0].node.name}`);
 
   const productCache = {};
 
@@ -490,34 +523,27 @@ async function runForShop(shop, accessToken, filePath) {
     if (!style || !inventoryKey) return;
 
     if (!productCache[style]) {
-      console.log(`Fetching products for style: ${style}`);
-
       const productRes = await shopifyGraphQL(
         shop,
         accessToken,
         `
-          query ($query: String!) {
-            products(first: 10, query: $query) {
-              edges {
-                node {
-                  id
-                  productType
-                  variants(first: 100) {
-                    edges {
-                      node {
-                        id
-                        sku
-                        inventoryItem {
-                          id
-                        }
-                      }
+        query ($query: String!) {
+          products(first: 10, query: $query) {
+            edges {
+              node {
+                variants(first: 100) {
+                  edges {
+                    node {
+                      sku
+                      inventoryItem { id }
                     }
                   }
                 }
               }
             }
           }
-        `,
+        }
+      `,
         { query: `product_type:${style}` }
       );
 
@@ -535,15 +561,12 @@ async function runForShop(shop, accessToken, filePath) {
             shop,
             accessToken,
             `
-              mutation inventorySet($input: InventorySetOnHandQuantitiesInput!) {
-                inventorySetOnHandQuantities(input: $input) {
-                  userErrors {
-                    field
-                    message
-                  }
-                }
+            mutation inventorySet($input: InventorySetOnHandQuantitiesInput!) {
+              inventorySetOnHandQuantities(input: $input) {
+                userErrors { field message }
               }
-            `,
+            }
+          `,
             {
               input: {
                 setQuantities: [
@@ -562,40 +585,23 @@ async function runForShop(shop, accessToken, filePath) {
     }
   });
 
-  console.log(`Inventory sync completed for shop: ${shop}`);
+  console.log(`Inventory sync completed`);
 }
 
 /* ------------------ Main Runner ------------------ */
+
 async function run() {
   try {
-    console.log("Starting full nightly sync...");
+    console.log("Starting nightly sync...");
 
-    console.log("⬇ Downloading Sanmar CSV...");
+    const accessToken = await getAccessToken(SHOP);
+
+    console.log("Downloading Sanmar CSV...");
     await downloadSanmarCSV({ force: true });
 
-    // ✅ READ SESSIONS FROM JSON FILE (Prisma removed)
-    // if (!fs.existsSync(SESSION_FILE)) {
-    //   console.log("No offline session file found.");
-    //   process.exit(0);
-    // }
+    await runForShop(SHOP, accessToken, CACHE_FILE);
 
-    // const sessions = JSON.parse(
-    //   fs.readFileSync(SESSION_FILE, "utf-8")
-    // );
-
-    // if (!sessions.length) {
-    //   console.log("No installed shops found.");
-    //   process.exit(0);
-    // }
-
-    // console.log(`Found ${sessions.length} shop(s)`);
-
-    // for (const session of sessions) {
-    //   await runForShop(session.shop, session.accessToken, CACHE_FILE);
-    // }
-    await runForShop(`${process.env.SHOPIFY_STORE}.myshopify.com`, process.env.SHOPIFY_ACCESS_TOKEN, CACHE_FILE);
-
-    console.log("Full nightly sync completed.");
+    console.log("Nightly sync completed");
     process.exit(0);
   } catch (err) {
     console.error("Nightly sync failed:", err);
