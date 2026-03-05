@@ -13,6 +13,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const url = new URL(request.url);
   const page = parseInt(url.searchParams.get("page") || "1", 10);
+  const search = (url.searchParams.get("search") || "").toLowerCase();
+  const filter = url.searchParams.get("filter") || "all";
 
   if (!fs.existsSync(CACHE_FILE)) {
     return Response.json({ products: [], page: 1, totalPages: 1 });
@@ -35,10 +37,24 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const style = row["STYLE#"];
     if (!style) continue;
 
+    const title = he.decode(row["PRODUCT_TITLE"] || "");
+    const styleStr = String(style).toLowerCase();
+    const category = (row["CATEGORY_NAME"] || "").toLowerCase();
+
+    // SEARCH FILTER
+    if (
+      search &&
+      !title.toLowerCase().includes(search) &&
+      !styleStr.includes(search) &&
+      !category.includes(search)
+    ) {
+      continue;
+    }
+
     if (!map.has(style)) {
       map.set(style, {
         style,
-        title: he.decode(row["PRODUCT_TITLE"]),
+        title,
         category: row["CATEGORY_NAME"],
         totalVariants: 0,
         totalInventory: 0,
@@ -57,12 +73,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const grouped = Array.from(map.values());
 
-  const totalPages = Math.ceil(grouped.length / PAGE_SIZE);
-  const start = (page - 1) * PAGE_SIZE;
-  const paginated = grouped.slice(start, start + PAGE_SIZE);
-
-  // 🔥 MATCH USING product_type INSTEAD OF HANDLE
-  const styles = paginated.map((p) => String(p.style));
+  // SHOPIFY MATCH FOR ALL GROUPED STYLES
+  const styles = grouped.map((p) => String(p.style));
   const searchQuery = styles.map((s) => `product_type:${s}`).join(" OR ");
 
   let typeToIdMap: Record<string, string> = {};
@@ -94,7 +106,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }, {});
   }
 
-  const finalProducts = paginated.map((p) => {
+  // MAP WITH SHOPIFY STATUS
+  let finalProducts = grouped.map((p) => {
     const productId = typeToIdMap[String(p.style)] || null;
 
     return {
@@ -104,8 +117,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     };
   });
 
+  // FILTER APPLY
+  if (filter === "added") {
+    finalProducts = finalProducts.filter((p) => p.existsInStore);
+  }
+
+  if (filter === "not_added") {
+    finalProducts = finalProducts.filter((p) => !p.existsInStore);
+  }
+
+  // PAGINATION LAST
+  const totalPages = Math.ceil(finalProducts.length / PAGE_SIZE);
+  const start = (page - 1) * PAGE_SIZE;
+  const paginated = finalProducts.slice(start, start + PAGE_SIZE);
+
   return Response.json({
-    products: finalProducts,
+    products: paginated,
     page,
     totalPages,
   });

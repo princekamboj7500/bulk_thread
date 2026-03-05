@@ -134,7 +134,9 @@ export default function Index() {
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [selectedProduct, setSelectedProduct] = useState<any | null>(null);
   const [loadingMap, setLoadingMap] = useState<Record<string, boolean>>({});
-
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   function setRowLoading(style: string, value: boolean) {
     setLoadingMap((prev) => ({ ...prev, [style]: value }));
   }
@@ -191,20 +193,41 @@ export default function Index() {
 
     checkStatus();
   }, []);
-  async function loadProducts(pageNumber: number) {
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 700); // 700ms debounce
+
+    return () => clearTimeout(timer);
+  }, [search]);
+  useEffect(() => {
+    if (syncStatus !== "done") return;
+
+    setPage(1);
+    loadProducts(1, debouncedSearch);
+  }, [debouncedSearch]);
+  useEffect(() => {
+    if (syncStatus !== "done") return;
+    setPage(1);
+    loadProducts(1, debouncedSearch);
+  }, [filter]);
+
+  async function loadProducts(pageNumber: number, searchValue = search) {
     setLoadingProducts(true);
 
-    const res = await fetch(`/api/products?page=${pageNumber}`);
+    const res = await fetch(
+      `/api/products?page=${pageNumber}&search=${encodeURIComponent(searchValue)}&filter=${filter}`
+    );
+
     const data = await res.json();
 
-    const list = data.products || [];
-    setProducts(list);
+    setProducts(data.products || []);
     setTotalPages(data.totalPages || 1);
     setPage(data.page || 1);
 
     setLoadingProducts(false);
   }
-
   function startPolling() {
     const interval = setInterval(async () => {
       const res = await fetch("/api/sync/status");
@@ -265,26 +288,28 @@ export default function Index() {
   console.log(products, "products_____");
   if (syncStatus === "checking") {
     return (
-      <s-page heading="Inventory Sync">
+      <s-page heading="Products">
         <s-section>
           <s-stack>
             <s-paragraph>Checking sync status...</s-paragraph>
           </s-stack>
         </s-section>
+        <s-button variant="primary" slot="primary-action" onClick={startSync}>
+          Re-run Sync
+        </s-button>
       </s-page>
     );
   }
   return (
-    <s-page heading="Inventory Sync">
-
+    <s-page heading="Products" inlineSize="large">
+      <s-button variant="primary" slot="primary-action" onClick={startSync}>
+        Re-run Sync
+      </s-button>
       {/* Sync Section */}
       {syncStatus === "done" ? (<s-grid alignItems="end" paddingBlock="base" justifyItems="end">
         <s-grid-item>
-          <s-button variant="primary" onClick={startSync}>
-            Re-run Sync
-          </s-button>
         </s-grid-item>
-      </s-grid>) : <s-section heading="Inventory Sync">
+      </s-grid>) : <s-section heading="Products Sync">
         <s-stack>
           <s-button
             onClick={startSync}
@@ -311,13 +336,38 @@ export default function Index() {
 
       {/* Products */}
       {syncStatus === "done" && (
-        <s-section heading="Products">
+        <s-section>
+          <s-grid paddingBlockEnd="base" gridTemplateColumns="1fr auto" gap="base" alignItems="end">
+            <s-grid-item>
+              <s-text-field
+                value={search}
+                placeholder="Search by product name, style, or category..."
+                icon="search"
+                onInput={(e: any) => {
+                  const value = e.target.value;
+                  setSearch(value);
+                }}
+              />
+            </s-grid-item>
 
+            <s-grid-item>
+              <s-select
+                value={filter}
+                onChange={(e: any) => setFilter(e.target.value)}
+              >
+                <s-option value="all">All Products</s-option>
+                <s-option value="added">Synced to Shopify</s-option>
+                <s-option value="not_added">Not Synced Yet</s-option>
+              </s-select>
+            </s-grid-item>
+          </s-grid>
           {loadingProducts ? (
             <ProductsSkeleton rows={10} />
           ) : (
             <>
+
               <s-table loading={false}>
+
                 <s-table-header-row>
                   <s-table-header>Title</s-table-header>
                   <s-table-header>Style</s-table-header>
@@ -328,7 +378,7 @@ export default function Index() {
                 </s-table-header-row>
 
                 <s-table-body>
-                  {products?.map((p) => {
+                  {products.map((p) => {
                     const rowLoading = loadingMap[p.style] === true;
 
                     return (
@@ -337,7 +387,7 @@ export default function Index() {
                         <s-table-cell>
                           <s-stack direction="inline" gap="small-300"
                             alignItems="center">
-                            <div style={{display: "flex", alignItems: "center", gap: "6px"}}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                               <s-box blockSize="50px" inlineSize="50px">
                                 <s-image
                                   objectFit="contain"
@@ -410,7 +460,7 @@ export default function Index() {
               >
                 <s-button
                   disabled={page === 1}
-                  onClick={() => loadProducts(page - 1)}
+                  onClick={() => loadProducts(page - 1, search)}
                 >
                   Previous
                 </s-button>
@@ -421,7 +471,7 @@ export default function Index() {
 
                 <s-button
                   disabled={page === totalPages}
-                  onClick={() => loadProducts(page + 1)}
+                  onClick={() => loadProducts(page + 1, search)}
                 >
                   Next
                 </s-button>
