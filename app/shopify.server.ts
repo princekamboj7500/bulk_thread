@@ -80,54 +80,49 @@ const shopify = shopifyApp({
   // },
   hooks: {
     afterAuth: async ({ session }) => {
-      console.log(`App installed for shop: ${session.shop}`);
-      console.log(session,"session_____");
-      try {
-        if (!session.isOnline) {
-          const filePath = path.join(
-            process.cwd(),
-            "offline-sessions.json"
-          );
+      console.log("Auth triggered for:", session.shop);
 
-          let existingSessions: any[] = [];
+      if (!session.isOnline) {
 
-          if (fs.existsSync(filePath)) {
-            const raw = fs.readFileSync(filePath, "utf-8");
-            existingSessions = raw ? JSON.parse(raw) : [];
+        const filePath = path.join(process.cwd(), "offline-sessions.json");
+
+        let sessions: any[] = [];
+
+        if (fs.existsSync(filePath)) {
+          sessions = JSON.parse(fs.readFileSync(filePath, "utf8") || "[]");
+        }
+
+        const alreadyExists = sessions.find(
+          (s) => s.shop === session.shop
+        );
+
+        if (alreadyExists) {
+          console.log("Offline session already exists. Skipping...");
+          return;
+        }
+
+        console.log("Saving new offline token:", session.accessToken);
+
+        sessions.push({
+          shop: session.shop,
+          accessToken: session.accessToken,
+        });
+
+        fs.writeFileSync(filePath, JSON.stringify(sessions, null, 2));
+
+        console.log("Offline session stored.");
+
+        // run background sync only once
+        (async () => {
+          try {
+            console.log("Starting SanMar sync...");
+            await downloadSanmarCSV();
+            console.log("SanMar sync completed.");
+          } catch (err) {
+            console.error("SanMar sync failed:", err);
           }
-
-          // Remove old session of same shop
-          existingSessions = existingSessions.filter(
-            (s) => s.shop !== session.shop
-          );
-
-          // Add new session
-          existingSessions.push({
-            shop: session.shop,
-            accessToken: session.accessToken,
-          });
-
-          fs.writeFileSync(
-            filePath,
-            JSON.stringify(existingSessions, null, 2)
-          );
-
-          console.log("Offline session saved at project root.");
-        }
-      } catch (err) {
-        console.error("Failed to store session JSON:", err);
+        })();
       }
-
-      // Background sync
-      (async () => {
-        try {
-          console.log("Starting background SanMar sync after install...");
-          await downloadSanmarCSV();
-          console.log("SanMar sync completed after install.");
-        } catch (err) {
-          console.error("SanMar sync failed:", err);
-        }
-      })();
     },
   },
   ...(process.env.SHOP_CUSTOM_DOMAIN
