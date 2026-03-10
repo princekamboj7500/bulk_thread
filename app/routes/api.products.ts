@@ -9,8 +9,18 @@ import prisma from "app/db.server";
 const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
 const PAGE_SIZE = 50;
 
+/* ---------------- STYLE EXTRACTOR (Handle Based) ---------------- */
+
+function extractStyleFromHandle(handle: string | null) {
+  if (!handle) return null;
+  const str = handle.toLowerCase();
+  const match = str.match(/\b[a-z]*\d{3,}[a-z]*\b/i);
+  return match ? match[0].toUpperCase() : null;
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
+
   const url = new URL(request.url);
   const page = parseInt(url.searchParams.get("page") || "1", 10);
   const search = (url.searchParams.get("search") || "").toLowerCase();
@@ -21,6 +31,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const fileStream = fs.createReadStream(CACHE_FILE, { encoding: "utf8" });
+
   const rl = readline.createInterface({
     input: fileStream,
     crlfDelay: Infinity,
@@ -41,7 +52,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const styleStr = String(style).toLowerCase();
     const category = (row["CATEGORY_NAME"] || "").toLowerCase();
 
-    // SEARCH FILTER
     if (
       search &&
       !title.toLowerCase().includes(search) &&
@@ -51,6 +61,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       continue;
     }
 
+    /* ---------------- CREATE PRODUCT GROUP ---------------- */
+
     if (!map.has(style)) {
       map.set(style, {
         style,
@@ -58,6 +70,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         category: row["CATEGORY_NAME"],
         totalVariants: 0,
         totalInventory: 0,
+        seenVariants: new Set(),
         image:
           row["FRONT_MODEL_IMAGE_URL"] ||
           (row["PRODUCT_IMAGE"]
@@ -67,48 +80,84 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
 
     const product = map.get(style);
-    product.totalVariants += 1;
-    product.totalInventory += parseInt(row["QTY"] || "0", 10);
+
+    /* ---------------- VARIANT KEY (COLOR + SIZE BASED) ---------------- */
+
+    const color = row["COLOR_NAME"] || "Default";
+    const size = row["SIZE"] || "OS";
+
+    const variantKey = `${color}-${size}`;
+
+    const qty = parseInt(row["QTY"] || "0", 10);
+
+    /* ---------------- DUPLICATE CHECK ---------------- */
+
+    if (!product.seenVariants.has(variantKey)) {
+      product.seenVariants.add(variantKey);
+
+      product.totalVariants += 1;
+      product.totalInventory += qty;
+    }
   }
 
-  const grouped = Array.from(map.values());
+  /* remove helper set before response */
 
-  // SHOPIFY MATCH FOR ALL GROUPED STYLES
-  const styles = grouped.map((p) => String(p.style));
-  const searchQuery = styles.map((s) => `product_type:${s}`).join(" OR ");
+  const grouped = Array.from(map.values()).map((p) => {
+    delete p.seenVariants;
+    return p;
+  });
+
+  /* ---------------- FETCH SHOPIFY PRODUCTS ---------------- */
 
   let typeToIdMap: Record<string, string> = {};
 
-  if (searchQuery) {
+  let hasNextPage = true;
+  let cursor: string | null = null;
+
+  while (hasNextPage) {
     const res = await admin.graphql(
       `#graphql
-      query getProducts($query: String!) {
-        products(first: 250, query: $query) {
+      query getProducts($cursor: String) {
+        products(first: 250, after: $cursor) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
           edges {
             node {
               id
-              productType
+              handle
             }
           }
         }
       }`,
       {
-        variables: { query: searchQuery },
+        variables: { cursor },
       }
     );
 
     const json = await res.json();
-    const edges = json?.data?.products?.edges || [];
 
-    typeToIdMap = edges.reduce((acc: any, edge: any) => {
-      acc[edge.node.productType] = edge.node.id;
-      return acc;
-    }, {});
+    const products = json?.data?.products?.edges || [];
+
+    for (const edge of products) {
+      const handle = edge.node.handle;
+
+      const style = extractStyleFromHandle(handle);
+
+      if (style) {
+        typeToIdMap[style] = edge.node.id;
+      }
+    }
+
+    hasNextPage = json?.data?.products?.pageInfo?.hasNextPage;
+    cursor = json?.data?.products?.pageInfo?.endCursor;
   }
 
-  // MAP WITH SHOPIFY STATUS
+  /* ---------------- MAP SANMAR PRODUCTS ---------------- */
+
   let finalProducts = grouped.map((p) => {
-    const productId = typeToIdMap[String(p.style)] || null;
+    const productId = typeToIdMap[String(p.style).toUpperCase()] || null;
 
     return {
       ...p,
@@ -117,7 +166,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     };
   });
 
-  // FILTER APPLY
+  /* ---------------- FILTER ---------------- */
+
   if (filter === "added") {
     finalProducts = finalProducts.filter((p) => p.existsInStore);
   }
@@ -126,9 +176,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     finalProducts = finalProducts.filter((p) => !p.existsInStore);
   }
 
-  // PAGINATION LAST
+  /* ---------------- PAGINATION ---------------- */
+
   const totalPages = Math.ceil(finalProducts.length / PAGE_SIZE);
+
   const start = (page - 1) * PAGE_SIZE;
+
   const paginated = finalProducts.slice(start, start + PAGE_SIZE);
 
   return Response.json({

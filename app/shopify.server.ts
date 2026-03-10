@@ -62,67 +62,20 @@ const shopify = shopifyApp({
   },
 
   // AFTER INSTALL HOOK
-  // hooks: {
-  //   afterAuth: async ({ session }) => {
-  //     console.log(` App installed for shop: ${session.shop}`);
-  //     // Run background sync (non-blocking)
-  //     (async () => {
-  //       try {
-  //         console.log(" Starting background SanMar sync after install...");
-
-  //         await downloadSanmarCSV();
-  //         console.log(" SanMar sync completed after install.");
-  //       } catch (err) {
-  //         console.error(" SanMar sync failed:", err);
-  //       }
-  //     })();
-  //   },
-  // },
   hooks: {
     afterAuth: async ({ session }) => {
-      console.log("Auth triggered for:", session.shop);
+      console.log(` App installed for shop: ${session.shop}`);
+      // Run background sync (non-blocking)
+      (async () => {
+        try {
+          console.log(" Starting background SanMar sync after install...");
 
-      if (!session.isOnline) {
-
-        const filePath = path.join(process.cwd(), "offline-sessions.json");
-
-        let sessions: any[] = [];
-
-        if (fs.existsSync(filePath)) {
-          sessions = JSON.parse(fs.readFileSync(filePath, "utf8") || "[]");
+          await downloadSanmarCSV();
+          console.log(" SanMar sync completed after install.");
+        } catch (err) {
+          console.error(" SanMar sync failed:", err);
         }
-
-        const alreadyExists = sessions.find(
-          (s) => s.shop === session.shop
-        );
-
-        if (alreadyExists) {
-          console.log("Offline session already exists. Skipping...");
-          return;
-        }
-
-        console.log("Saving new offline token:", session.accessToken);
-
-        sessions.push({
-          shop: session.shop,
-          accessToken: session.accessToken,
-        });
-
-        fs.writeFileSync(filePath, JSON.stringify(sessions, null, 2));
-
-        console.log("Offline session stored.");
-
-        // run background sync only once
-        (async () => {
-          try {
-            console.log("Starting SanMar sync...");
-            await downloadSanmarCSV();
-            console.log("SanMar sync completed.");
-          } catch (err) {
-            console.error("SanMar sync failed:", err);
-          }
-        })();
-      }
+      })();
     },
   },
   ...(process.env.SHOP_CUSTOM_DOMAIN

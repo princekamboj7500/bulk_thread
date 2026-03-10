@@ -7,114 +7,23 @@ import Papa from "papaparse";
 import SftpClient from "ssh2-sftp-client";
 import unzipper from "unzipper";
 
-/* ------------------ ESM dirname fix ------------------ */
+/* ---------------- ESM dirname fix ---------------- */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
 const CSV_FILE = path.join(process.cwd(), "SanMar_EPDD.csv");
 const ZIP_FILE = path.join(process.cwd(), "SanMar_EPDD.zip");
-const SESSION_FILE = path.join(process.cwd(), "offline-sessions.json");
 
-async function downloadSanmarCSV(options = {}) {
-  const force = options?.force === true;
-
-  if (!force && fs.existsSync(CACHE_FILE)) {
-    console.log("Using cached SanMar data...");
-    return true;
-  }
-
-  if (force) {
-    console.log("Force sync enabled → clearing old cache...");
-    if (fs.existsSync(CACHE_FILE)) fs.unlinkSync(CACHE_FILE);
-    if (fs.existsSync(CSV_FILE)) fs.unlinkSync(CSV_FILE);
-    if (fs.existsSync(ZIP_FILE)) fs.unlinkSync(ZIP_FILE);
-  }
-
-  const sftp = new SftpClient();
-
-  console.log("Connecting to SanMar SFTP...");
-
-  await sftp.connect({
-    host: process.env.FTP_DOMAIN_SANMAR,
-    username: process.env.FTP_USERNAME_SANMAR,
-    password: process.env.FTP_PASSWORD_SANMAR,
-    port: 2200,
-    readyTimeout: 60000,
-  });
-
-  console.log("Downloading EPDD zip...");
-  await sftp.fastGet("/SanMarPDD/SanMar_EPDD_csv.zip", ZIP_FILE);
-  await sftp.end();
-
-  console.log("Unzipping CSV...");
-
-  await new Promise((resolve, reject) => {
-    fs.createReadStream(ZIP_FILE)
-      .pipe(unzipper.Parse())
-      .on("entry", (entry) => {
-        const fileName = entry.path.toLowerCase();
-        if (fileName.endsWith(".csv")) {
-          entry
-            .pipe(fs.createWriteStream(CSV_FILE))
-            .on("finish", resolve)
-            .on("error", reject);
-        } else {
-          entry.autodrain();
-        }
-      })
-      .on("error", reject);
-  });
-
-  if (fs.existsSync(ZIP_FILE)) fs.unlinkSync(ZIP_FILE);
-
-  console.log("Building JSON cache (streamed)...");
-
-  return new Promise((resolve, reject) => {
-    const fileStream = fs.createReadStream(CSV_FILE);
-    const writeStream = fs.createWriteStream(CACHE_FILE);
-
-    writeStream.write("[\n");
-
-    let buffer = [];
-    let count = 0;
-    const BATCH_SIZE = 500;
-    let isFirstRow = true;
-
-    function flushBuffer() {
-      if (!buffer.length) return;
-      const chunk = (isFirstRow ? "" : ",\n") + buffer.join(",\n");
-      buffer = [];
-      isFirstRow = false;
-
-      if (!writeStream.write(chunk)) {
-        fileStream.pause();
-        writeStream.once("drain", () => fileStream.resume());
-      }
-    }
-
-    Papa.parse(fileStream, {
-      header: true,
-      skipEmptyLines: true,
-      step: (result) => {
-        buffer.push(JSON.stringify(result.data));
-        count++;
-        if (buffer.length >= BATCH_SIZE) flushBuffer();
-      },
-      complete: () => {
-        flushBuffer();
-        writeStream.write("\n]");
-        writeStream.end(() => {
-          console.log(`Parsed ${count} rows & cache rebuilt`);
-          resolve(true);
-        });
-      },
-      error: reject,
-    });
-  });
+/* ---------------- STYLE EXTRACTOR ---------------- */
+function extractStyle(handle) {
+  if (!handle) return null;
+  const str = handle.toLowerCase();
+  const match = str.match(/\b[a-z]*\d{3,}[a-z]*\b/i);
+  return match ? match[0].toUpperCase() : null;
 }
 
-/* ------------------ Shopify GraphQL Helper ------------------ */
+/* ---------------- Shopify GraphQL Helper ---------------- */
 async function shopifyGraphQL(shop, token, query, variables = {}) {
   const res = await fetch(`https://${shop}/admin/api/2024-01/graphql.json`, {
     method: "POST",
@@ -124,175 +33,258 @@ async function shopifyGraphQL(shop, token, query, variables = {}) {
     },
     body: JSON.stringify({ query, variables }),
   });
-
   const json = await res.json();
   if (json.errors) throw new Error(JSON.stringify(json.errors));
   return json.data;
 }
 
-/* ------------------ STREAM PROCESSOR ------------------ */
-async function processLargeJsonFile(filePath, callback) {
-  const stream = fs.createReadStream(filePath, { encoding: "utf-8" });
+/* ---------------- Sanmar CSV Download ---------------- */
+async function downloadSanmarCSV() {
+  const sftp = new SftpClient();
+
+  console.log("Connecting to SanMar SFTP...");
+
+  await sftp.connect({
+    host: process.env.FTP_DOMAIN_SANMAR,
+    username: process.env.FTP_USERNAME_SANMAR,
+    password: process.env.FTP_PASSWORD_SANMAR,
+    port: 2200,
+  });
+
+  console.log("Downloading Sanmar file...");
+
+  await sftp.fastGet("/SanMarPDD/SanMar_EPDD_csv.zip", ZIP_FILE);
+  await sftp.end();
+
+  console.log("Unzipping CSV...");
+
+  await new Promise((resolve, reject) => {
+    fs.createReadStream(ZIP_FILE)
+      .pipe(unzipper.Parse())
+      .on("entry", (entry) => {
+        const name = entry.path.toLowerCase();
+        if (name.endsWith(".csv")) {
+          entry.pipe(fs.createWriteStream(CSV_FILE)).on("finish", resolve);
+        } else {
+          entry.autodrain();
+        }
+      })
+      .on("error", reject);
+  });
+
+  console.log("Building JSON cache...");
+
+  return new Promise((resolve, reject) => {
+    const readStream = fs.createReadStream(CSV_FILE);
+    const writeStream = fs.createWriteStream(CACHE_FILE);
+
+    writeStream.write("[\n");
+
+    let buffer = [];
+    let first = true;
+
+    Papa.parse(readStream, {
+      header: true,
+      skipEmptyLines: true,
+      step: (row) => {
+        buffer.push(JSON.stringify(row.data));
+
+        if (buffer.length >= 500) {
+          const chunk = (first ? "" : ",\n") + buffer.join(",\n");
+          writeStream.write(chunk);
+          buffer = [];
+          first = false;
+        }
+      },
+      complete: () => {
+        if (buffer.length) {
+          const chunk = (first ? "" : ",\n") + buffer.join(",\n");
+          writeStream.write(chunk);
+        }
+        writeStream.write("\n]");
+        writeStream.end(resolve);
+      },
+      error: reject,
+    });
+  });
+}
+
+/* ---------------- Build Shopify style-color-size Map ---------------- */
+async function buildSkuMap(shop, token) {
+  console.log("Scanning Shopify products...");
+
+  const variantMap = {}; // style-color-size -> inventoryItemId
+  let productCursor = null;
+  let hasNextProducts = true;
+
+  while (hasNextProducts) {
+    const productData = await shopifyGraphQL(
+      shop,
+      token,
+      `
+      query ($cursor: String) {
+        products(first: 100, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          edges { node { id handle } }
+        }
+      }
+      `,
+      { cursor: productCursor }
+    );
+
+    const products = productData.products.edges;
+
+    for (const p of products) {
+      const productId = p.node.id;
+      const handle = p.node.handle;
+      const style = extractStyle(handle);
+      if (!style) continue;
+
+      let variantCursor = null;
+      let hasNextVariants = true;
+
+      while (hasNextVariants) {
+        const variantData = await shopifyGraphQL(
+          shop,
+          token,
+          `
+          query ($id: ID!, $cursor: String) {
+            product(id: $id) {
+              variants(first: 250, after: $cursor) {
+                pageInfo { hasNextPage endCursor }
+                edges {
+                  node {
+                    selectedOptions { name value }
+                    inventoryItem { id }
+                  }
+                }
+              }
+            }
+          }
+          `,
+          { id: productId, cursor: variantCursor }
+        );
+
+        const variants = variantData.product.variants.edges;
+
+        for (const v of variants) {
+          const color = v.node?.selectedOptions[0]?.value || "Default";
+          const size = v.node?.selectedOptions[1]?.value || "OS";
+          const key = `${style}-${color}-${size}`.toUpperCase();
+
+          variantMap[key] = v.node.inventoryItem.id;
+        }
+
+        hasNextVariants = variantData.product.variants.pageInfo.hasNextPage;
+        variantCursor = variantData.product.variants.pageInfo.endCursor;
+      }
+    }
+
+    hasNextProducts = productData.products.pageInfo.hasNextPage;
+    productCursor = productData.products.pageInfo.endCursor;
+
+    console.log("Fetched product batch...");
+  }
+
+  console.log("Total variants mapped:", Object.keys(variantMap).length);
+
+  return variantMap;
+}
+
+/* ---------------- Stream Sanmar JSON ---------------- */
+async function processSanmar(file, callback) {
+  const stream = fs.createReadStream(file, { encoding: "utf-8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
   for await (const line of rl) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed === "[" || trimmed === "]") continue;
+    const clean = line.trim();
+    if (!clean || clean === "[" || clean === "]") continue;
 
-    const clean = trimmed.replace(/,$/, "");
-
-    try {
-      const parsed = JSON.parse(clean);
-      await callback(parsed);
-    } catch {}
+    const json = JSON.parse(clean.replace(/,$/, ""));
+    await callback(json);
   }
 }
 
-/* ------------------ Inventory Sync ------------------ */
-async function runForShop(shop, accessToken, filePath) {
-  console.log(`Starting inventory sync for shop: ${shop}`);
+/* ---------------- Inventory Update ---------------- */
+async function runInventorySync(shop, token, file) {
+  console.log("Fetching location...");
 
-  const locRes = await shopifyGraphQL(
+  const loc = await shopifyGraphQL(
     shop,
-    accessToken,
-    `
-      {
-        locations(first: 1) {
-          edges {
-            node {
-              id
-              name
-            }
-          }
-        }
-      }
-    `
+    token,
+    `{
+      locations(first:1){ edges{ node { id } } }
+    }`
   );
 
-  const locationId = locRes.locations.edges[0].node.id;
-  console.log(`Location: ${locRes.locations.edges[0].node.name}`);
+  const locationId = loc.locations.edges[0].node.id;
+  console.log("Location:", locationId);
 
-  const productCache = {};
+  const variantMap = await buildSkuMap(shop, token);
+  let updates = [];
 
-  await processLargeJsonFile(filePath, async (item) => {
-    const style = item["STYLE#"];
-    const inventoryKey = item["INVENTORY_KEY"];
-    const qty = parseInt(item["QTY"] || "0");
+  await processSanmar(file, async (row) => {
+    const style = row["STYLE#"];
+    const color = row["COLOR_NAME"] || "Default";
+    const size = row["SIZE"] || "OS";
+    const qty = parseInt(row["QTY"] || "0");
 
-    if (!style || !inventoryKey) return;
+    if (!style) return;
 
-    if (!productCache[style]) {
-      console.log(`Fetching products for style: ${style}`);
+    const key = `${style}-${color}-${size}`.toUpperCase();
+    const inventoryItemId = variantMap[key];
 
-      const productRes = await shopifyGraphQL(
-        shop,
-        accessToken,
-        `
-          query ($query: String!) {
-            products(first: 10, query: $query) {
-              edges {
-                node {
-                  id
-                  productType
-                  variants(first: 100) {
-                    edges {
-                      node {
-                        id
-                        sku
-                        inventoryItem {
-                          id
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        `,
-        { query: `product_type:${style}` }
-      );
+    if (!inventoryItemId) return;
 
-      productCache[style] = productRes.products.edges;
-    }
+    // --- LOGGING ---
+    console.log(
+      `Updating → Style: ${style}, Color: ${color}, Size: ${size}, Qty: ${qty}`
+    );
 
-    const products = productCache[style];
+    updates.push({ inventoryItemId, locationId, quantity: qty });
 
-    for (const p of products) {
-      for (const v of p.node.variants.edges) {
-        if (v.node.sku === inventoryKey) {
-          console.log(`${shop} → SKU ${inventoryKey} => ${qty}`);
-
-          await shopifyGraphQL(
-            shop,
-            accessToken,
-            `
-              mutation inventorySet($input: InventorySetOnHandQuantitiesInput!) {
-                inventorySetOnHandQuantities(input: $input) {
-                  userErrors {
-                    field
-                    message
-                  }
-                }
-              }
-            `,
-            {
-              input: {
-                setQuantities: [
-                  {
-                    inventoryItemId: v.node.inventoryItem.id,
-                    locationId,
-                    quantity: qty,
-                  },
-                ],
-                reason: "correction",
-              },
-            }
-          );
-        }
-      }
+    if (updates.length >= 50) {
+      await pushUpdates(shop, token, updates);
+      updates = [];
     }
   });
 
-  console.log(`Inventory sync completed for shop: ${shop}`);
+  if (updates.length) await pushUpdates(shop, token, updates);
+
+  console.log("Inventory sync complete.");
 }
 
-/* ------------------ Main Runner ------------------ */
+/* ---------------- Push Inventory Updates ---------------- */
+async function pushUpdates(shop, token, quantities) {
+  console.log("Updating batch:", quantities.length);
+
+  await shopifyGraphQL(
+    shop,
+    token,
+    `
+    mutation setInventory($input: InventorySetOnHandQuantitiesInput!) {
+      inventorySetOnHandQuantities(input: $input) {
+        userErrors { message }
+      }
+    }
+    `,
+    { input: { reason: "correction", setQuantities: quantities } }
+  );
+}
+
+/* ---------------- Main ---------------- */
 async function run() {
-  try {
-    console.log("Starting full nightly sync...");
+  console.log("Starting nightly sync...");
 
-    console.log("⬇ Downloading Sanmar CSV...");
-    await downloadSanmarCSV({ force: true });
+  await downloadSanmarCSV();
 
-    // ✅ READ SESSIONS FROM JSON FILE (Prisma removed)
-    // if (!fs.existsSync(SESSION_FILE)) {
-    //   console.log("No offline session file found.");
-    //   process.exit(0);
-    // }
+  await runInventorySync(
+    `${process.env.SHOPIFY_STORE}.myshopify.com`,
+    process.env.SHOPIFY_PASSWORD,
+    CACHE_FILE
+  );
 
-    // const sessions = JSON.parse(
-    //   fs.readFileSync(SESSION_FILE, "utf-8")
-    // );
-
-    // if (!sessions.length) {
-    //   console.log("No installed shops found.");
-    //   process.exit(0);
-    // }
-
-    // console.log(`Found ${sessions.length} shop(s)`);
-
-    // for (const session of sessions) {
-    //   await runForShop(session.shop, session.accessToken, CACHE_FILE);
-    // }
-    await runForShop(`${process.env.SHOPIFY_STORE}.myshopify.com`, process.env.SHOPIFY_PASSWORD, CACHE_FILE);
-
-    console.log("Full nightly sync completed.");
-    process.exit(0);
-  } catch (err) {
-    console.error("Nightly sync failed:", err);
-    process.exit(1);
-  }
+  console.log("Sync finished.");
 }
 
 run();

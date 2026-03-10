@@ -285,10 +285,9 @@ export default function Index() {
     await fetch("/api/sync/start");
     startPolling();
   }
-  console.log(products, "products_____");
   if (syncStatus === "checking") {
     return (
-      <s-page heading="Products">
+      <s-page heading="Products" inlineSize="large">
         <s-section>
           <s-stack>
             <s-paragraph>Checking sync status...</s-paragraph>
@@ -305,209 +304,222 @@ export default function Index() {
       <s-button variant="primary" slot="primary-action" onClick={startSync}>
         Re-run Sync
       </s-button>
-      {/* Sync Section */}
-      {syncStatus === "done" ? (<s-grid alignItems="end" paddingBlock="base" justifyItems="end">
-        <s-grid-item>
-        </s-grid-item>
-      </s-grid>) : <s-section heading="Products Sync">
-        <s-stack>
-          <s-button
-            onClick={startSync}
-            disabled={syncStatus === "running"}
-            {...(syncStatus === "running" ? { loading: true } : {})}
-          >
-            {syncStatus === "running"
-              ? "Sync Running..." : "Re-run Sync"
-            }
-          </s-button>
-          {syncStatus === "running" && (
-            <s-paragraph>
-              Sync in progress. Please wait...
-            </s-paragraph>
-          )}
+      <s-query-container>
+        {/* Sync Section */}
+        {syncStatus === "done" ? (<s-grid alignItems="end" paddingBlock="base" justifyItems="end">
+          <s-grid-item>
+          </s-grid-item>
+        </s-grid>) : <s-section heading="Products Sync">
+          <s-stack>
+            <s-button
+              onClick={startSync}
+              disabled={syncStatus === "running"}
+              {...(syncStatus === "running" ? { loading: true } : {})}
+            >
+              {syncStatus === "running"
+                ? "Sync Running..." : "Re-run Sync"
+              }
+            </s-button>
+            {syncStatus === "running" && (
+              <s-paragraph>
+                Sync in progress. Please wait...
+              </s-paragraph>
+            )}
 
-          {/* {syncStatus === "done" && (
+            {/* {syncStatus === "done" && (
             <s-paragraph>
               Sync completed. Cached data ready.
             </s-paragraph>
           )} */}
-        </s-stack>
-      </s-section>}
+          </s-stack>
+        </s-section>}
 
-      {/* Products */}
-      {syncStatus === "done" && (
-        <s-section>
-          <s-grid paddingBlockEnd="base" gridTemplateColumns="1fr auto" gap="base" alignItems="end">
-            <s-grid-item>
-              <s-text-field
-                value={search}
-                placeholder="Search by product name, style, or category..."
-                icon="search"
-                onInput={(e: any) => {
-                  const value = e.target.value;
-                  setSearch(value);
-                }}
-              />
-            </s-grid-item>
+        {/* Products */}
+        {syncStatus === "done" && (
+          <s-section>
+            <s-grid paddingBlockEnd="base" gridTemplateColumns="1fr auto" gap="base" alignItems="end">
+              <s-grid-item>
+                <s-text-field
+                  value={search}
+                  placeholder="Search by product name, style, or category..."
+                  icon="search"
+                  onInput={(e: any) => {
+                    const value = e.target.value;
+                    setSearch(value);
+                  }}
+                />
+              </s-grid-item>
 
-            <s-grid-item>
-              <s-select
-                value={filter}
-                onChange={(e: any) => setFilter(e.target.value)}
-              >
-                <s-option value="all">All Products</s-option>
-                <s-option value="added">Synced to Shopify</s-option>
-                <s-option value="not_added">Not Synced Yet</s-option>
-              </s-select>
-            </s-grid-item>
-          </s-grid>
-          {loadingProducts ? (
-            <ProductsSkeleton rows={10} />
-          ) : (
-            <>
-
-              <s-table loading={false}>
-
-                <s-table-header-row>
-                  <s-table-header>Title</s-table-header>
-                  <s-table-header>Style</s-table-header>
-                  <s-table-header>Category</s-table-header>
-                  <s-table-header format="numeric">Variants</s-table-header>
-                  <s-table-header format="numeric">Total Inventory</s-table-header>
-                  <s-table-header format="numeric">Action</s-table-header>
-                </s-table-header-row>
-
-                <s-table-body>
-                  {products.map((p) => {
-                    const rowLoading = loadingMap[p.style] === true;
-
-                    return (
-                      <s-table-row key={p.style}>
-
-                        <s-table-cell>
-                          <s-stack direction="inline" gap="small-300"
-                            alignItems="center">
-                            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                              <s-box blockSize="50px" inlineSize="50px">
-                                <s-image
-                                  objectFit="contain"
-                                  alt="Ocean Sunset puzzle thumbnail"
-                                  src={p?.image}
-                                  border="base strong" borderRadius="base"
-                                />
-                              </s-box>
-                              <s-paragraph lineClamp={1}>{p.title}</s-paragraph>
-                            </div>
-                          </s-stack>
-                        </s-table-cell>
-                        <s-table-cell>{p.style}</s-table-cell>
-                        <s-table-cell>{p.category}</s-table-cell>
-                        <s-table-cell>{p.totalVariants}</s-table-cell>
-                        <s-table-cell>{p.totalInventory}</s-table-cell>
-
-                        <s-table-cell>
-                          {p.existsInStore ? (
-                            <s-button
-                              tone="critical"
-                              disabled={rowLoading}
-                              {...(rowLoading ? { loading: true } : {})}
-                              commandFor="delete-modal"
-                              onClick={() => {
-                                if (!p.productId) return;
-                                setSelectedProduct(p);
-                              }}
-                            >
-                              Delete
-                            </s-button>
-                          ) : (
-                            <s-button
-                              tone="auto"
-                              disabled={rowLoading}
-                              {...(rowLoading ? { loading: true } : {})}
-                              onClick={async () => {
-                                setRowLoading(p.style, true);
-                                try {
-                                  await fetch("/api/products/add", {
-                                    method: "POST",
-                                    body: JSON.stringify({ style: p.style }),
-                                    headers: { "Content-Type": "application/json" },
-                                  });
-
-                                  shopify.toast.show("Product added to Shopify");
-                                  await loadProducts(page);
-                                } finally {
-                                  setRowLoading(p.style, false);
-                                }
-                              }}
-                            >
-                              Add
-                            </s-button>
-                          )}
-                        </s-table-cell>
-                      </s-table-row>
-                    );
-                  })}
-                </s-table-body>
-              </s-table>
-
-              {/* Pagination only after load */}
-              <s-stack
-                gap="base"
-                paddingBlockStart="base"
-                direction="inline"
-                alignItems="center"
-                justifyContent="end"
-              >
-                <s-button
-                  disabled={page === 1}
-                  onClick={() => loadProducts(page - 1, search)}
+              <s-grid-item>
+                <s-select
+                  value={filter}
+                  onChange={(e: any) => setFilter(e.target.value)}
                 >
-                  Previous
-                </s-button>
+                  <s-option value="all">All Products</s-option>
+                  <s-option value="added">Synced to Shopify</s-option>
+                  <s-option value="not_added">Not Synced Yet</s-option>
+                </s-select>
+              </s-grid-item>
+            </s-grid>
+            {loadingProducts ? (
+              <ProductsSkeleton rows={10} />
+            ) : (
+              <>
 
-                <s-text>
-                  Page {page} / {totalPages}
-                </s-text>
+                <s-table loading={false}>
 
-                <s-button
-                  disabled={page === totalPages}
-                  onClick={() => loadProducts(page + 1, search)}
+                  <s-table-header-row>
+                    <s-table-header>Title</s-table-header>
+                    <s-table-header>Style</s-table-header>
+                    <s-table-header>Category</s-table-header>
+                    <s-table-header format="numeric">Variants</s-table-header>
+                    <s-table-header format="numeric">Total Inventory</s-table-header>
+                    <s-table-header format="numeric">Action</s-table-header>
+                  </s-table-header-row>
+                  <s-table-body>
+
+                    {
+                      products.map((p) => {
+                        const rowLoading = loadingMap[p.style] === true;
+
+                        return (
+                          <s-table-row key={p.style}>
+                            <s-table-cell>
+                              <s-stack direction="inline" gap="small-300"
+                                alignItems="center">
+                                <s-box blockSize="50px" inlineSize="50px">
+                                  <s-image
+                                    objectFit="contain"
+                                    alt="Ocean Sunset puzzle thumbnail"
+                                    src={p?.image}
+                                    border="base strong" borderRadius="base"
+                                  />
+                                </s-box>
+                                <s-paragraph lineClamp={1}>{p.title}</s-paragraph>
+                                {/* <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                                <s-box blockSize="50px" inlineSize="50px">
+                                  <s-image
+                                    objectFit="contain"
+                                    alt="Ocean Sunset puzzle thumbnail"
+                                    src={p?.image}
+                                    border="base strong" borderRadius="base"
+                                  />
+                                </s-box>
+                                <s-paragraph lineClamp={1}>{p.title}</s-paragraph>
+                              </div> */}
+                              </s-stack>
+                            </s-table-cell>
+                            <s-table-cell>{p.style}</s-table-cell>
+                            <s-table-cell>{p.category}</s-table-cell>
+                            <s-table-cell>{p.totalVariants}</s-table-cell>
+                            <s-table-cell>{p.totalInventory}</s-table-cell>
+
+                            <s-table-cell>
+                              {p.existsInStore ? (
+                                <s-button
+                                  tone="critical"
+                                  disabled={rowLoading}
+                                  {...(rowLoading ? { loading: true } : {})}
+                                  commandFor="delete-modal"
+                                  onClick={() => {
+                                    if (!p.productId) return;
+                                    setSelectedProduct(p);
+                                  }}
+                                >
+                                  Delete
+                                </s-button>
+                              ) : (
+                                <s-button
+                                  tone="auto"
+                                  disabled={rowLoading}
+                                  {...(rowLoading ? { loading: true } : {})}
+                                  onClick={async () => {
+                                    setRowLoading(p.style, true);
+                                    try {
+                                      await fetch("/api/products/add", {
+                                        method: "POST",
+                                        body: JSON.stringify({ style: p.style }),
+                                        headers: { "Content-Type": "application/json" },
+                                      });
+
+                                      shopify.toast.show("Product added to Shopify");
+                                      await loadProducts(page);
+                                    } finally {
+                                      setRowLoading(p.style, false);
+                                    }
+                                  }}
+                                >
+                                  Add
+                                </s-button>
+                              )}
+                            </s-table-cell>
+                          </s-table-row>
+                        );
+                      })
+
+                    }
+                  </s-table-body>
+                </s-table>
+
+                {/* Pagination only after load */}
+                <s-stack
+                  gap="base"
+                  paddingBlockStart="base"
+                  direction="inline"
+                  alignItems="center"
+                  justifyContent="end"
                 >
-                  Next
-                </s-button>
-              </s-stack>
-            </>
-          )}
+                  <s-button
+                    disabled={page === 1}
+                    onClick={() => loadProducts(page - 1, search)}
+                  >
+                    Previous
+                  </s-button>
 
-        </s-section>
-      )}
-      <s-modal id="delete-modal" heading="Delete Product">
-        <s-paragraph>
-          Are you sure you want to delete "{selectedProduct?.title}" from Shopify?
-        </s-paragraph>
+                  <s-text>
+                    Page {page} / {totalPages}
+                  </s-text>
 
-        <s-button
-          slot="secondary-actions"
-          commandFor="delete-modal"
-          command="--hide"
-          onClick={() => {
-            setSelectedProduct(null);
-          }}
-        >
-          Cancel
-        </s-button>
+                  <s-button
+                    disabled={page === totalPages}
+                    onClick={() => loadProducts(page + 1, search)}
+                  >
+                    Next
+                  </s-button>
+                </s-stack>
+              </>
+            )}
 
-        <s-button
-          slot="primary-action"
-          variant="primary"
-          tone="critical"
-          commandFor="delete-modal"
-          command="--hide"
-          onClick={handleDeleteConfirmed}
-        >
-          Delete
-        </s-button>
-      </s-modal>
+          </s-section>
+        )}
+        <s-modal id="delete-modal" heading="Delete Product">
+          <s-paragraph>
+            Are you sure you want to delete "{selectedProduct?.title}" from Shopify?
+          </s-paragraph>
+
+          <s-button
+            slot="secondary-actions"
+            commandFor="delete-modal"
+            command="--hide"
+            onClick={() => {
+              setSelectedProduct(null);
+            }}
+          >
+            Cancel
+          </s-button>
+
+          <s-button
+            slot="primary-action"
+            variant="primary"
+            tone="critical"
+            commandFor="delete-modal"
+            command="--hide"
+            onClick={handleDeleteConfirmed}
+          >
+            Delete
+          </s-button>
+        </s-modal>
+      </s-query-container>
     </s-page>
   );
 }

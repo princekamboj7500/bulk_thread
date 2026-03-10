@@ -5,7 +5,23 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import he from "he";
 const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
+function generateHandle(title: string, style: string) {
+  const cleanTitle = title
+    .toLowerCase()
+    .replace(/[®™]/g, "")
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-");
 
+  const styleSlug = String(style).toLowerCase();
+
+  // ensure style always at end
+  if (!cleanTitle.endsWith(styleSlug)) {
+    return `${cleanTitle}-${styleSlug}`;
+  }
+
+  return cleanTitle;
+}
 export const action = async ({ request }: ActionFunctionArgs) => {
   try {
     const { admin } = await authenticate.admin(request);
@@ -76,7 +92,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       sizeSet.add(sizeName);
 
       if (variantMap.has(key)) {
-        variantMap.get(key).inventoryQuantities[0].availableQuantity += qty;
+        variantMap.get(key).inventoryQuantities[0].availableQuantity = qty;
       } else {
         variantMap.set(key, {
           price: row["PIECE_PRICE"] || row["SUGGESTED_PRICE"] || "0",
@@ -145,7 +161,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const selectedNode = leafNode || nodes[0];
 
     categoryId = selectedNode?.id || null;
-
+    const title = he.decode(baseProduct["PRODUCT_TITLE"] || "");
+    const handle = generateHandle(title, style);
     console.log("Taxonomy Search:", `${categoryName} ${subCategoryName}`);
     console.log("Matched Category:", selectedNode?.fullName);
     console.log("Category ID:", categoryId);
@@ -161,7 +178,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       {
         variables: {
           input: {
-            title: he.decode(baseProduct["PRODUCT_TITLE"] || ""),
+            title,
+            handle,
             vendor: baseProduct["MILL"],
             category: categoryId,
             productType: style,
@@ -368,8 +386,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     /* STEP 4: CREATE REMAINING VARIANTS */
     const remainingVariants = variants.slice(1);
     const shopifyVariants = remainingVariants.map(({ imageUrl, ...rest }) => rest);
-    console.log(shopifyVariants, "shopVariants___________");
-
+    // console.log(shopifyVariants, "shopVariants___________");
+    // shopifyVariants?.forEach((item) => {
+    //   console.log(item?.inventoryQuantities, "inventory_quantitiessss_____");
+    // });
     if (shopifyVariants.length) {
       await admin.graphql(
         `#graphql
