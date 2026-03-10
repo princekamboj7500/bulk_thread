@@ -583,7 +583,7 @@ async function pushUpdates(shop, token, quantities) {
 async function run() {
   console.log("Starting nightly sync...");
 
-  // await downloadSanmarCSV();
+  await downloadSanmarCSV();
 
   await runInventorySync(
     `${process.env.SHOPIFY_STORE}.myshopify.com`,
