@@ -70,7 +70,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     let baseProduct: any = null;
     const variantMap = new Map<string, any>();
-    const imagesSet = new Set<string>();
+    const colorImageMap = new Map<string, string>();
     const colorSet = new Set<string>();
     const sizeSet = new Set<string>();
 
@@ -95,7 +95,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         variantMap.get(key).inventoryQuantities[0].availableQuantity = qty;
       } else {
         variantMap.set(key, {
-          price: row["PIECE_PRICE"] || row["SUGGESTED_PRICE"] || "0",
+          price: row["MAP_PRICING"] || "0",
           optionValues: [
             { name: colorName, optionName: "Color" },
             { name: sizeName, optionName: "Size" },
@@ -106,7 +106,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         });
       }
 
-      if (imageUrl) imagesSet.add(imageUrl);
+      if (imageUrl && !colorImageMap.has(colorName)) {
+        colorImageMap.set(colorName, imageUrl);
+      }
     }
 
     if (!baseProduct) {
@@ -171,7 +173,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       `#graphql
       mutation createProduct($input: ProductCreateInput!) {
         productCreate(product: $input) {
-          product { id variants(first:50){edges{node{id sku}}} }
+          product { id variants(first:250){edges{node{id sku}}} }
           userErrors { field message }
         }
       }`,
@@ -404,28 +406,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     /* STEP 5: UPLOAD IMAGES */
-    const imageArray = Array.from(imagesSet);
+
+    const imageArray = Array.from(colorImageMap.values());
     let uploadedMediaIds: string[] = [];
+    const imageUrlToMediaId = new Map<string, string>();
 
     if (imageArray.length) {
+
       const mediaRes = await admin.graphql(
         `#graphql
-    mutation addMedia($product: ProductUpdateInput!, $media: [CreateMediaInput!]) {
-      productUpdate(product: $product, media: $media) {
-        product {
-          media(first: 100) {
-            edges {
-              node {
-                ... on MediaImage {
-                  id
+          mutation addMedia($product: ProductUpdateInput!, $media: [CreateMediaInput!]) {
+            productUpdate(product: $product, media: $media) {
+              product {
+                media(first: 100) {
+                  edges {
+                    node {
+                      ... on MediaImage {
+                        id
+                      }
+                    }
+                  }
                 }
               }
+              userErrors { field message }
             }
           }
-        }
-        userErrors { field message }
-      }
-    }`,
+        `,
         {
           variables: {
             product: { id: productId },
@@ -441,38 +447,84 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const edges = mediaJson?.data?.productUpdate?.product?.media?.edges || [];
 
       uploadedMediaIds = edges.map((e: any) => e.node.id);
+
+      /* CREATE URL → MEDIA MAP */
+      uploadedMediaIds.forEach((mediaId, index) => {
+        const url = imageArray[index];
+        imageUrlToMediaId.set(url, mediaId);
+      });
+
     }
 
     /* STEP 6: ASSIGN IMAGES TO VARIANTS (INDEX BASED MAPPING) */
     const variantAssignments: any[] = [];
 
     // fetch all variants
-    const variantsRes = await admin.graphql(`
-  query getVariants($id: ID!) {
-    product(id: $id) {
-      variants(first: 100) {
-        edges {
-          node { id }
+    let shopify_variants: any[] = [];
+    let hasNextPage = true;
+    let cursor: string | null = null;
+
+    while (hasNextPage) {
+
+      const variantsRes = await admin.graphql(
+        `#graphql
+    query getVariants($id: ID!, $cursor: String) {
+      product(id: $id) {
+        variants(first: 250, after: $cursor) {
+          edges {
+            cursor
+            node {
+              id
+              selectedOptions {
+                name
+                value
+              }
+            }
+          }
+          pageInfo {
+            hasNextPage
+          }
         }
       }
     }
-  }
-`, { variables: { id: productId } });
+    `,
+        { variables: { id: productId, cursor } }
+      );
 
-    const variantsJson = await variantsRes.json();
-    const shopify_variants = variantsJson?.data?.product?.variants?.edges || [];
+      const variantsJson = await variantsRes.json();
+
+      const edges = variantsJson?.data?.product?.variants?.edges || [];
+
+      shopify_variants.push(...edges);
+
+      hasNextPage =
+        variantsJson?.data?.product?.variants?.pageInfo?.hasNextPage || false;
+
+      cursor = edges.length ? edges[edges.length - 1].cursor : null;
+    }
 
     /*
       IMPORTANT:
       uploadedMediaIds order == imageArray order == variants order (from CSV aggregation)
     */
-    for (let i = 0; i < shopify_variants.length; i++) {
-      const variantId = shopify_variants[i]?.node?.id;
-      const mediaId = uploadedMediaIds[i];
+    for (const edge of shopify_variants) {
 
-      if (variantId && mediaId) {
+      const variant = edge.node;
+
+      const colorOption = variant.selectedOptions.find(
+        (o: any) => o.name === "Color"
+      );
+
+      if (!colorOption) continue;
+
+      const color = colorOption.value;
+
+      const imageUrl = colorImageMap.get(color);
+      const mediaId = imageUrlToMediaId.get(imageUrl);
+
+      if (mediaId) {
         variantAssignments.push({
-          id: variantId,
+          id: variant.id,
           mediaId,
         });
       }

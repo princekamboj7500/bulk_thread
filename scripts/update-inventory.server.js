@@ -289,8 +289,6 @@
 
 // run();
 
-
-
 import "dotenv/config";
 import fs from "fs";
 import path from "path";
@@ -310,10 +308,55 @@ const ZIP_FILE = path.join(process.cwd(), "SanMar_EPDD.zip");
 
 /* ---------------- STYLE EXTRACTOR ---------------- */
 function extractStyle(handle) {
+  // if (!handle) return null;
+  // const str = handle.toLowerCase();
+  // const match = str.match(/\b[a-z]*\d{3,}[a-z]*\b/i);
+  // return match ? match[0].toUpperCase() : null;
   if (!handle) return null;
-  const str = handle.toLowerCase();
-  const match = str.match(/\b[a-z]*\d{3,}[a-z]*\b/i);
-  return match ? match[0].toUpperCase() : null;
+
+  const parts = handle.toLowerCase().split("-").filter(Boolean);
+
+  let candidates = [];
+
+  for (const part of parts) {
+    const hasDigit = /\d/.test(part);
+    if (!hasDigit) continue;
+
+    const hasLetter = /[a-z]/.test(part);
+    const digitCount = (part.match(/\d/g) || []).length;
+    const letterCount = (part.match(/[a-z]/g) || []).length;
+
+    let score = 0;
+
+    // alphanumeric styles like q611, pc61, 3001cvc are usually stronger candidates
+    if (hasLetter && hasDigit) score += 5;
+
+    // style code usually starts with letters then digits: q611, pc61, dt6000
+    if (/^[a-z]+\d+[a-z]*$/i.test(part)) score += 10;
+
+    // pure numeric style like 64000, 18500 is also valid
+    if (/^\d+[a-z]*$/i.test(part)) score += 4;
+
+    // penalize measurement-like parts such as 25l, 12oz, 50ml
+    if (/^\d+[a-z]{1,2}$/i.test(part)) score -= 6;
+
+    // reasonable style length
+    if (part.length >= 2 && part.length <= 12) score += 2;
+
+    // more digits often means real style code
+    if (digitCount >= 2) score += 1;
+
+    candidates.push({ part, score });
+  }
+
+  if (!candidates.length) {
+    const match = handle.toLowerCase().match(/[a-z]*\d+[a-z]*/i);
+    return match ? match[0].toUpperCase() : null;
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+
+  return candidates[0].part.toUpperCase();
 }
 
 /* ---------------- Shopify GraphQL Helper ---------------- */
@@ -423,7 +466,7 @@ async function buildSkuMap(shop, token) {
         }
       }
       `,
-      { cursor: productCursor }
+      { cursor: productCursor },
     );
 
     const products = productData.products.edges;
@@ -456,13 +499,12 @@ async function buildSkuMap(shop, token) {
             }
           }
           `,
-          { id: productId, cursor: variantCursor }
+          { id: productId, cursor: variantCursor },
         );
 
         const variants = variantData.product.variants.edges;
 
         for (const v of variants) {
-
           let color = "Default";
           let size = "OS";
 
@@ -522,7 +564,7 @@ async function runInventorySync(shop, token, file) {
     token,
     `{
       locations(first:1){ edges{ node { id } } }
-    }`
+    }`,
   );
 
   const locationId = loc.locations.edges[0].node.id;
@@ -545,7 +587,7 @@ async function runInventorySync(shop, token, file) {
     if (!inventoryItemId) return;
 
     console.log(
-      `Updating → Style: ${style}, Color: ${color}, Size: ${size}, Qty: ${qty}`
+      `Updating → Style: ${style}, Color: ${color}, Size: ${size}, Qty: ${qty}`,
     );
 
     updates.push({ inventoryItemId, locationId, quantity: qty });
@@ -575,7 +617,7 @@ async function pushUpdates(shop, token, quantities) {
       }
     }
     `,
-    { input: { reason: "correction", setQuantities: quantities } }
+    { input: { reason: "correction", setQuantities: quantities } },
   );
 }
 
@@ -583,12 +625,12 @@ async function pushUpdates(shop, token, quantities) {
 async function run() {
   console.log("Starting nightly sync...");
 
-  await downloadSanmarCSV();
+  // await downloadSanmarCSV();
 
   await runInventorySync(
     `${process.env.SHOPIFY_STORE}.myshopify.com`,
     process.env.SHOPIFY_PASSWORD,
-    CACHE_FILE
+    CACHE_FILE,
   );
 
   console.log("Sync finished.");

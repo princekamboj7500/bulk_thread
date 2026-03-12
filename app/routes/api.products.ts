@@ -12,10 +12,55 @@ const PAGE_SIZE = 50;
 /* ---------------- STYLE EXTRACTOR (Handle Based) ---------------- */
 
 function extractStyleFromHandle(handle: string | null) {
+  // if (!handle) return null;
+  // const str = handle.toLowerCase();
+  // const match = str.match(/\b[a-z]*\d{3,}[a-z]*\b/i);
+  // return match ? match[0].toUpperCase() : null;
   if (!handle) return null;
-  const str = handle.toLowerCase();
-  const match = str.match(/\b[a-z]*\d{3,}[a-z]*\b/i);
-  return match ? match[0].toUpperCase() : null;
+
+  const parts = handle.toLowerCase().split("-").filter(Boolean);
+
+  let candidates = [];
+
+  for (const part of parts) {
+    const hasDigit = /\d/.test(part);
+    if (!hasDigit) continue;
+
+    const hasLetter = /[a-z]/.test(part);
+    const digitCount = (part.match(/\d/g) || []).length;
+    const letterCount = (part.match(/[a-z]/g) || []).length;
+
+    let score = 0;
+
+    // alphanumeric styles like q611, pc61, 3001cvc are usually stronger candidates
+    if (hasLetter && hasDigit) score += 5;
+
+    // style code usually starts with letters then digits: q611, pc61, dt6000
+    if (/^[a-z]+\d+[a-z]*$/i.test(part)) score += 10;
+
+    // pure numeric style like 64000, 18500 is also valid
+    if (/^\d+[a-z]*$/i.test(part)) score += 4;
+
+    // penalize measurement-like parts such as 25l, 12oz, 50ml
+    if (/^\d+[a-z]{1,2}$/i.test(part)) score -= 6;
+
+    // reasonable style length
+    if (part.length >= 2 && part.length <= 12) score += 2;
+
+    // more digits often means real style code
+    if (digitCount >= 2) score += 1;
+
+    candidates.push({ part, score });
+  }
+
+  if (!candidates.length) {
+    const match = handle.toLowerCase().match(/[a-z]*\d+[a-z]*/i);
+    return match ? match[0].toUpperCase() : null;
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+
+  return candidates[0].part.toUpperCase();
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
