@@ -37,7 +37,7 @@ function extractStyleFromHandle(handle: string | null) {
   if (!styles.length) return null;
   styles.sort((a, b) => b.length - a.length);
 
-  return styles[0];
+  return styles[0].toUpperCase();
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {

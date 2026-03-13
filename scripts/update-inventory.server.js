@@ -335,7 +335,7 @@ function extractStyle(handle) {
   // prefer longest style (112pl over 112)
   styles.sort((a, b) => b.length - a.length);
 
-  return styles[0];
+  return styles[0].toUpperCase();
 }
 
 /* ---------------- Shopify GraphQL Helper ---------------- */
