@@ -12,55 +12,31 @@ const PAGE_SIZE = 50;
 /* ---------------- STYLE EXTRACTOR (Handle Based) ---------------- */
 
 function extractStyleFromHandle(handle: string | null) {
-  // if (!handle) return null;
-  // const str = handle.toLowerCase();
-  // const match = str.match(/\b[a-z]*\d{3,}[a-z]*\b/i);
-  // return match ? match[0].toUpperCase() : null;
   if (!handle) return null;
 
   const parts = handle.toLowerCase().split("-").filter(Boolean);
 
-  let candidates = [];
+  const candidates = [];
 
   for (const part of parts) {
-    const hasDigit = /\d/.test(part);
-    if (!hasDigit) continue;
+    // must contain digit
+    if (!/\d/.test(part)) continue;
 
-    const hasLetter = /[a-z]/.test(part);
-    const digitCount = (part.match(/\d/g) || []).length;
-    const letterCount = (part.match(/[a-z]/g) || []).length;
+    // ignore small numeric tokens
+    if (/^\d$/.test(part)) continue;
 
-    let score = 0;
+    // ignore patterns like 1-4 or 5-in-1 pieces already split
+    if (part === "in") continue;
 
-    // alphanumeric styles like q611, pc61, 3001cvc are usually stronger candidates
-    if (hasLetter && hasDigit) score += 5;
-
-    // style code usually starts with letters then digits: q611, pc61, dt6000
-    if (/^[a-z]+\d+[a-z]*$/i.test(part)) score += 10;
-
-    // pure numeric style like 64000, 18500 is also valid
-    if (/^\d+[a-z]*$/i.test(part)) score += 4;
-
-    // penalize measurement-like parts such as 25l, 12oz, 50ml
-    if (/^\d+[a-z]{1,2}$/i.test(part)) score -= 6;
-
-    // reasonable style length
-    if (part.length >= 2 && part.length <= 12) score += 2;
-
-    // more digits often means real style code
-    if (digitCount >= 2) score += 1;
-
-    candidates.push({ part, score });
+    // strong candidates (letters+numbers)
+    if (/^[a-z]*\d+[a-z]*$/i.test(part)) {
+      candidates.push(part);
+    }
   }
 
-  if (!candidates.length) {
-    const match = handle.toLowerCase().match(/[a-z]*\d+[a-z]*/i);
-    return match ? match[0].toUpperCase() : null;
-  }
+  if (!candidates.length) return null;
 
-  candidates.sort((a, b) => b.score - a.score);
-
-  return candidates[0].part.toUpperCase();
+  return candidates[candidates.length - 1];
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -154,7 +130,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   /* ---------------- FETCH SHOPIFY PRODUCTS ---------------- */
 
-  let typeToIdMap: Record<string, string> = {};
+  let typeToIdMap: Record<string, string[]> = {};
 
   let hasNextPage = true;
   let cursor: string | null = null;
@@ -191,7 +167,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       const style = extractStyleFromHandle(handle);
 
       if (style) {
-        typeToIdMap[style] = edge.node.id;
+        if (!typeToIdMap[style]) {
+          typeToIdMap[style] = [];
+        }
+
+        typeToIdMap[style].push(edge.node.id);
       }
     }
 
@@ -202,12 +182,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   /* ---------------- MAP SANMAR PRODUCTS ---------------- */
 
   let finalProducts = grouped.map((p) => {
-    const productId = typeToIdMap[String(p.style).toUpperCase()] || null;
+    const productIds = typeToIdMap[String(p.style).toUpperCase()] || [];
 
     return {
       ...p,
-      existsInStore: Boolean(productId),
-      productId,
+      existsInStore: productIds.length > 0,
+      productIds,
     };
   });
 

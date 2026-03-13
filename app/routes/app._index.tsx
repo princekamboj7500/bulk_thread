@@ -141,24 +141,24 @@ export default function Index() {
     setLoadingMap((prev) => ({ ...prev, [style]: value }));
   }
 
-  async function syncInventoryForExisting(productsList: any[]) {
-    for (const p of productsList) {
-      if (!p.existsInStore || !p.productId) continue;
+  // async function syncInventoryForExisting(productsList: any[]) {
+  //   for (const p of productsList) {
+  //     if (!p.existsInStore || !p.productId) continue;
 
-      try {
-        await fetch("/api/products/sync-inventory", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            style: p.style,
-            productId: p.productId,
-          }),
-        });
-      } catch (err) {
-        console.error("Inventory sync failed for", p.style, err);
-      }
-    }
-  }
+  //     try {
+  //       await fetch("/api/products/sync-inventory", {
+  //         method: "POST",
+  //         headers: { "Content-Type": "application/json" },
+  //         body: JSON.stringify({
+  //           style: p.style,
+  //           productId: p.productId,
+  //         }),
+  //       });
+  //     } catch (err) {
+  //       console.error("Inventory sync failed for", p.style, err);
+  //     }
+  //   }
+  // }
 
   // useEffect(() => {
   //   async function checkStatus() {
@@ -248,26 +248,22 @@ export default function Index() {
   //   startPolling();
   // }
   async function handleDeleteConfirmed() {
-    if (!selectedProduct?.productId) return;
+    if (!selectedProduct?.productIds?.length) return;
 
     const style = selectedProduct.style;
     setRowLoading(style, true);
 
     try {
-      const res = await fetch("/api/product/delete", {
+      await fetch("/api/product/delete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productId: selectedProduct.productId }),
+        body: JSON.stringify({
+          productIds: selectedProduct.productIds
+        }),
       });
 
-      const data = await res.json();
-
-      if (data.success) {
-        shopify.toast.show("Product deleted from Shopify");
-        await loadProducts(page);
-      } else {
-        shopify.toast.show("Delete failed");
-      }
+      shopify.toast.show("Products deleted from Shopify");
+      await loadProducts(page);
     } finally {
       setRowLoading(style, false);
       setSelectedProduct(null);
@@ -422,7 +418,7 @@ export default function Index() {
                                   {...(rowLoading ? { loading: true } : {})}
                                   commandFor="delete-modal"
                                   onClick={() => {
-                                    if (!p.productId) return;
+                                    if (!p.productIds?.length) return;
                                     setSelectedProduct(p);
                                   }}
                                 >
@@ -494,7 +490,7 @@ export default function Index() {
         )}
         <s-modal id="delete-modal" heading="Delete Product">
           <s-paragraph>
-            Are you sure you want to delete "{selectedProduct?.title}" from Shopify?
+            Are you sure you want to delete all Shopify products for "{selectedProduct?.title}"?
           </s-paragraph>
 
           <s-button

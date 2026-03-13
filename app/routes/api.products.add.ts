@@ -13,7 +13,7 @@ function generateHandle(title: string, style: string) {
     .trim()
     .replace(/\s+/g, "-");
 
-  const styleSlug = String(style).toLowerCase();
+const styleSlug = String(style).toLowerCase();
 
   // ensure style always at end
   if (!cleanTitle.endsWith(styleSlug)) {
@@ -21,6 +21,15 @@ function generateHandle(title: string, style: string) {
   }
 
   return cleanTitle;
+}
+function chunkVariants(arr: any[], size: number) {
+  const chunks = [];
+
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+
+  return chunks;
 }
 export const action = async ({ request }: ActionFunctionArgs) => {
   try {
@@ -115,7 +124,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return Response.json({ error: "Product not found" }, { status: 404 });
     }
 
-    const variants = Array.from(variantMap.values());
+    // const variants = Array.from(variantMap.values());
+    const variants = Array.from(variantMap.values()).sort((a, b) => {
+      const colorA = a.optionValues[0].name;
+      const colorB = b.optionValues[0].name;
+
+      const sizeA = a.optionValues[1].name;
+      const sizeB = b.optionValues[1].name;
+
+      if (colorA === colorB) {
+        return sizeA.localeCompare(sizeB);
+      }
+
+      return colorA.localeCompare(colorB);
+    });
+
+    const variantGroups = chunkVariants(variants, 100);
     /* STEP 1.5: FETCH TAXONOMY CATEGORY ID (ROBUST MATCHING) */
     let categoryId: string | null = null;
 
@@ -163,132 +187,151 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const selectedNode = leafNode || nodes[0];
 
     categoryId = selectedNode?.id || null;
-    const title = he.decode(baseProduct["PRODUCT_TITLE"] || "");
-    const handle = generateHandle(title, style);
+    // const title = he.decode(baseProduct["PRODUCT_TITLE"] || "");
+    // const handle = generateHandle(title, style);
     console.log("Taxonomy Search:", `${categoryName} ${subCategoryName}`);
     console.log("Matched Category:", selectedNode?.fullName);
     console.log("Category ID:", categoryId);
-    /* STEP 2: CREATE PRODUCT */
-    const productRes = await admin.graphql(
-      `#graphql
+    let productIndex = 0;
+    const createdProducts: string[] = [];
+    const baseTitle = he.decode(baseProduct["PRODUCT_TITLE"] || "");
+    const baseHandle = generateHandle(baseTitle, style);
+    const imageArray = Array.from(colorImageMap.values());
+    for (const groupVariants of variantGroups) {
+
+      const groupColorSet = new Set<string>();
+      const groupSizeSet = new Set<string>();
+
+      groupVariants.forEach((v) => {
+        groupColorSet.add(v.optionValues[0].name);
+        groupSizeSet.add(v.optionValues[1].name);
+      });
+      const title = baseTitle;
+      const handle =
+        productIndex === 0
+          ? baseHandle
+          : `${baseHandle}-basic-colors-${productIndex + 1}`;
+      /* STEP 2: CREATE PRODUCT */
+      const productRes = await admin.graphql(
+        `#graphql
       mutation createProduct($input: ProductCreateInput!) {
         productCreate(product: $input) {
           product { id variants(first:250){edges{node{id sku}}} }
           userErrors { field message }
         }
       }`,
-      {
-        variables: {
-          input: {
-            title,
-            handle,
-            vendor: baseProduct["MILL"],
-            category: categoryId,
-            productType: style,
-            descriptionHtml: he.decode(baseProduct["PRODUCT_DESCRIPTION"] || ""),
-            tags: [style],
-            metafields: [
-              {
-                namespace: "custom",
-                key: "subcategory",
-                type: "single_line_text_field",
-                value: baseProduct["SUBCATEGORY_NAME"] || "",
-              },
-            ],
-            productOptions: [
-              { name: "Color", values: Array.from(colorSet).map((n) => ({ name: n })) },
-              { name: "Size", values: Array.from(sizeSet).map((n) => ({ name: n })) },
-            ],
+        {
+          variables: {
+            input: {
+              title,
+              handle,
+              vendor: baseProduct["MILL"],
+              category: categoryId,
+              productType: style,
+              descriptionHtml: he.decode(baseProduct["PRODUCT_DESCRIPTION"] || ""),
+              tags: [style],
+              metafields: [
+                {
+                  namespace: "custom",
+                  key: "subcategory",
+                  type: "single_line_text_field",
+                  value: baseProduct["SUBCATEGORY_NAME"] || "",
+                },
+              ],
+              productOptions: [
+                { name: "Color", values: Array.from(groupColorSet).map((n) => ({ name: n })) },
+                { name: "Size", values: Array.from(groupSizeSet).map((n) => ({ name: n })) },
+              ],
+            },
           },
-        },
+        }
+      );
+
+      const productJson = await productRes.json();
+      const createErrors = productJson?.data?.productCreate?.userErrors;
+      if (createErrors?.length) {
+        return Response.json({ error: "Product create failed", details: createErrors }, { status: 500 });
       }
-    );
 
-    const productJson = await productRes.json();
-    const createErrors = productJson?.data?.productCreate?.userErrors;
-    if (createErrors?.length) {
-      return Response.json({ error: "Product create failed", details: createErrors }, { status: 500 });
-    }
+      const productId = productJson.data.productCreate.product.id;
+      const firstVariantId =
+        productJson.data.productCreate.product.variants.edges[0].node.id;
 
-    const productId = productJson.data.productCreate.product.id;
-    const firstVariantId =
-      productJson.data.productCreate.product.variants.edges[0].node.id;
-
-    /* STEP 3: UPDATE FIRST VARIANT (UNCHANGED) */
-    const firstVariant = variants[0];
-    await admin.graphql(
-      `#graphql
+      /* STEP 3: UPDATE FIRST VARIANT (UNCHANGED) */
+      const firstVariant = groupVariants[0];
+      await admin.graphql(
+        `#graphql
       mutation updateFirstVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
         productVariantsBulkUpdate(productId: $productId, variants: $variants) {
           userErrors { field message }
         }
       }`,
-      {
-        variables: {
-          productId,
-          variants: [
-            {
-              id: firstVariantId,
-              price: firstVariant.price,
-              optionValues: firstVariant.optionValues,
-              inventoryItem: firstVariant.inventoryItem,
-            },
-          ],
-        },
-      }
-    );
+        {
+          variables: {
+            productId,
+            variants: [
+              {
+                id: firstVariantId,
+                price: firstVariant.price,
+                optionValues: firstVariant.optionValues,
+                inventoryItem: firstVariant.inventoryItem,
+              },
+            ],
+          },
+        }
+      );
 
-    // /* STEP 3.1: INVENTORY (UNCHANGED) */
-    // const invRes = await admin.graphql(
-    //   `#graphql
-    //   query getInventoryItem($id: ID!) {
-    //     node(id: $id) {
-    //       ... on ProductVariant {
-    //         inventoryItem { id }
-    //       }
-    //     }
-    //   }`,
-    //   { variables: { id: firstVariantId } }
-    // );
+      // /* STEP 3.1: INVENTORY (UNCHANGED) */
+      // const invRes = await admin.graphql(
+      //   `#graphql
+      //   query getInventoryItem($id: ID!) {
+      //     node(id: $id) {
+      //       ... on ProductVariant {
+      //         inventoryItem { id }
+      //       }
+      //     }
+      //   }`,
+      //   { variables: { id: firstVariantId } }
+      // );
 
-    // const invJson = await invRes.json();
-    // const inventoryItemId = invJson?.data?.node?.inventoryItem?.id;
-    // const qty = variants[0].inventoryQuantities[0].availableQuantity;
+      // const invJson = await invRes.json();
+      // const inventoryItemId = invJson?.data?.node?.inventoryItem?.id;
+      // const qty = variants[0].inventoryQuantities[0].availableQuantity;
 
-    // await admin.graphql(
-    //   `#graphql
-    //   mutation activateInventory($inventoryItemId: ID!, $locationId: ID!) {
-    //     inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
-    //       inventoryLevel { id }
-    //       userErrors { field message }
-    //     }
-    //   }`,
-    //   { variables: { inventoryItemId, locationId } }
-    // );
+      // await admin.graphql(
+      //   `#graphql
+      //   mutation activateInventory($inventoryItemId: ID!, $locationId: ID!) {
+      //     inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
+      //       inventoryLevel { id }
+      //       userErrors { field message }
+      //     }
+      //   }`,
+      //   { variables: { inventoryItemId, locationId } }
+      // );
 
-    // await admin.graphql(
-    //   `#graphql
-    //   mutation setInventory($input: InventorySetQuantitiesInput!) {
-    //     inventorySetQuantities(input: $input) {
-    //       userErrors { field message }
-    //     }
-    //   }`,
-    //   {
-    //     variables: {
-    //       input: {
-    //         name: "available",
-    //         reason: "correction",
-    //         ignoreCompareQuantity: true,
-    //         quantities: [
-    //           { inventoryItemId, locationId, quantity: qty },
-    //         ],
-    //       },
-    //     },
-    //   }
-    // );
-    /* STEP 3.1: INVENTORY FOR ALL LOCATIONS */
-    const invRes = await admin.graphql(
-      `#graphql
+      // await admin.graphql(
+      //   `#graphql
+      //   mutation setInventory($input: InventorySetQuantitiesInput!) {
+      //     inventorySetQuantities(input: $input) {
+      //       userErrors { field message }
+      //     }
+      //   }`,
+      //   {
+      //     variables: {
+      //       input: {
+      //         name: "available",
+      //         reason: "correction",
+      //         ignoreCompareQuantity: true,
+      //         quantities: [
+      //           { inventoryItemId, locationId, quantity: qty },
+      //         ],
+      //       },
+      //     },
+      //   }
+      // );
+      /* STEP 3.1: INVENTORY FOR ALL LOCATIONS */
+      const invRes = await admin.graphql(
+        `#graphql
         query getInventoryItem($id: ID!) {
           node(id: $id) {
             ... on ProductVariant {
@@ -297,58 +340,58 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           }
         }
       `,
-      { variables: { id: firstVariantId } }
-    );
+        { variables: { id: firstVariantId } }
+      );
 
-    const invJson = await invRes.json();
-    const inventoryItemId = invJson?.data?.node?.inventoryItem?.id;
-    const qty = variants[0].inventoryQuantities[0].availableQuantity;
-    console.log(qty, "dsfsfsfasfasf");
-    console.log(locationIds, "locationsIds_________");
+      const invJson = await invRes.json();
+      const inventoryItemId = invJson?.data?.node?.inventoryItem?.id;
+      const qty = groupVariants[0].inventoryQuantities[0].availableQuantity;
+      console.log(qty, "dsfsfsfasfasf");
+      console.log(locationIds, "locationsIds_________");
 
-    /* Loop all locations */
-    // for (const locId of locationIds) {
-    //   await admin.graphql(
-    //     `#graphql
-    //       mutation activateInventory($inventoryItemId: ID!, $locationId: ID!) {
-    //         inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
-    //           inventoryLevel { id }
-    //           userErrors { field message }
-    //         }
-    //       }
-    //     `,
-    //     { variables: { inventoryItemId, locationId: locId } }
-    //   );
+      /* Loop all locations */
+      // for (const locId of locationIds) {
+      //   await admin.graphql(
+      //     `#graphql
+      //       mutation activateInventory($inventoryItemId: ID!, $locationId: ID!) {
+      //         inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
+      //           inventoryLevel { id }
+      //           userErrors { field message }
+      //         }
+      //       }
+      //     `,
+      //     { variables: { inventoryItemId, locationId: locId } }
+      //   );
 
-    //   await admin.graphql(
-    //     `#graphql
-    //       mutation setInventory($input: InventorySetQuantitiesInput!) {
-    //         inventorySetQuantities(input: $input) {
-    //           userErrors { field message }
-    //         }
-    //       }
-    //     `,
-    //     {
-    //       variables: {
-    //         input: {
-    //           name: "available",
-    //           reason: "correction",
-    //           ignoreCompareQuantity: true,
-    //           quantities: [
-    //             {
-    //               inventoryItemId,
-    //               locationId: locId,
-    //               quantity: qty,
-    //             },
-    //           ],
-    //         },
-    //       },
-    //     }
-    //   );
-    // }
-    /* one location */
-    await admin.graphql(
-      `#graphql
+      //   await admin.graphql(
+      //     `#graphql
+      //       mutation setInventory($input: InventorySetQuantitiesInput!) {
+      //         inventorySetQuantities(input: $input) {
+      //           userErrors { field message }
+      //         }
+      //       }
+      //     `,
+      //     {
+      //       variables: {
+      //         input: {
+      //           name: "available",
+      //           reason: "correction",
+      //           ignoreCompareQuantity: true,
+      //           quantities: [
+      //             {
+      //               inventoryItemId,
+      //               locationId: locId,
+      //               quantity: qty,
+      //             },
+      //           ],
+      //         },
+      //       },
+      //     }
+      //   );
+      // }
+      /* one location */
+      await admin.graphql(
+        `#graphql
         mutation activateInventory($inventoryItemId: ID!, $locationId: ID!) {
           inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
             inventoryLevel { id }
@@ -356,65 +399,65 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           }
         }
       `,
-      { variables: { inventoryItemId, locationId } }
-    );
+        { variables: { inventoryItemId, locationId } }
+      );
 
-    // set inventory only once
-    await admin.graphql(
-      `#graphql
+      // set inventory only once
+      await admin.graphql(
+        `#graphql
         mutation setInventory($input: InventorySetQuantitiesInput!) {
           inventorySetQuantities(input: $input) {
             userErrors { field message }
           }
         }
       `,
-      {
-        variables: {
-          input: {
-            name: "available",
-            reason: "correction",
-            ignoreCompareQuantity: true,
-            quantities: [
-              {
-                inventoryItemId,
-                locationId,
-                quantity: qty,
-              },
-            ],
+        {
+          variables: {
+            input: {
+              name: "available",
+              reason: "correction",
+              ignoreCompareQuantity: true,
+              quantities: [
+                {
+                  inventoryItemId,
+                  locationId,
+                  quantity: qty,
+                },
+              ],
+            },
           },
-        },
-      }
-    );
-    /* STEP 4: CREATE REMAINING VARIANTS */
-    const remainingVariants = variants.slice(1);
-    const shopifyVariants = remainingVariants.map(({ imageUrl, ...rest }) => rest);
-    // console.log(shopifyVariants, "shopVariants___________");
-    // shopifyVariants?.forEach((item) => {
-    //   console.log(item?.inventoryQuantities, "inventory_quantitiessss_____");
-    // });
-    if (shopifyVariants.length) {
-      await admin.graphql(
-        `#graphql
+        }
+      );
+      /* STEP 4: CREATE REMAINING VARIANTS */
+      const remainingVariants = groupVariants.slice(1);
+      const shopifyVariants = remainingVariants.map(({ imageUrl, ...rest }) => rest);
+      // console.log(shopifyVariants, "shopVariants___________");
+      // shopifyVariants?.forEach((item) => {
+      //   console.log(item?.inventoryQuantities, "inventory_quantitiessss_____");
+      // });
+      if (shopifyVariants.length) {
+        await admin.graphql(
+          `#graphql
         mutation createVariants($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
           productVariantsBulkCreate(productId: $productId, variants: $variants) {
             productVariants { id sku }
             userErrors { field message }
           }
         }`,
-        { variables: { productId, variants: shopifyVariants } }
-      );
-    }
+          { variables: { productId, variants: shopifyVariants } }
+        );
+      }
 
-    /* STEP 5: UPLOAD IMAGES */
+      /* STEP 5: UPLOAD IMAGES */
 
-    const imageArray = Array.from(colorImageMap.values());
-    let uploadedMediaIds: string[] = [];
-    const imageUrlToMediaId = new Map<string, string>();
 
-    if (imageArray.length) {
+      let uploadedMediaIds: string[] = [];
+      const imageUrlToMediaId = new Map<string, string>();
 
-      const mediaRes = await admin.graphql(
-        `#graphql
+      if (imageArray.length) {
+
+        const mediaRes = await admin.graphql(
+          `#graphql
           mutation addMedia($product: ProductUpdateInput!, $media: [CreateMediaInput!]) {
             productUpdate(product: $product, media: $media) {
               product {
@@ -432,42 +475,42 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             }
           }
         `,
-        {
-          variables: {
-            product: { id: productId },
-            media: imageArray.map((url) => ({
-              mediaContentType: "IMAGE",
-              originalSource: url,
-            })),
-          },
-        }
-      );
+          {
+            variables: {
+              product: { id: productId },
+              media: imageArray.map((url) => ({
+                mediaContentType: "IMAGE",
+                originalSource: url,
+              })),
+            },
+          }
+        );
 
-      const mediaJson = await mediaRes.json();
-      const edges = mediaJson?.data?.productUpdate?.product?.media?.edges || [];
+        const mediaJson = await mediaRes.json();
+        const edges = mediaJson?.data?.productUpdate?.product?.media?.edges || [];
 
-      uploadedMediaIds = edges.map((e: any) => e.node.id);
+        uploadedMediaIds = edges.map((e: any) => e.node.id);
 
-      /* CREATE URL → MEDIA MAP */
-      uploadedMediaIds.forEach((mediaId, index) => {
-        const url = imageArray[index];
-        imageUrlToMediaId.set(url, mediaId);
-      });
+        /* CREATE URL → MEDIA MAP */
+        uploadedMediaIds.forEach((mediaId, index) => {
+          const url = imageArray[index];
+          imageUrlToMediaId.set(url, mediaId);
+        });
 
-    }
+      }
 
-    /* STEP 6: ASSIGN IMAGES TO VARIANTS (INDEX BASED MAPPING) */
-    const variantAssignments: any[] = [];
+      /* STEP 6: ASSIGN IMAGES TO VARIANTS (INDEX BASED MAPPING) */
+      const variantAssignments: any[] = [];
 
-    // fetch all variants
-    let shopify_variants: any[] = [];
-    let hasNextPage = true;
-    let cursor: string | null = null;
+      // fetch all variants
+      let shopify_variants: any[] = [];
+      let hasNextPage = true;
+      let cursor: string | null = null;
 
-    while (hasNextPage) {
+      while (hasNextPage) {
 
-      const variantsRes = await admin.graphql(
-        `#graphql
+        const variantsRes = await admin.graphql(
+          `#graphql
     query getVariants($id: ID!, $cursor: String) {
       product(id: $id) {
         variants(first: 250, after: $cursor) {
@@ -488,105 +531,111 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
     }
     `,
-        { variables: { id: productId, cursor } }
-      );
+          { variables: { id: productId, cursor } }
+        );
 
-      const variantsJson = await variantsRes.json();
+        const variantsJson = await variantsRes.json();
 
-      const edges = variantsJson?.data?.product?.variants?.edges || [];
+        const edges = variantsJson?.data?.product?.variants?.edges || [];
 
-      shopify_variants.push(...edges);
+        shopify_variants.push(...edges);
 
-      hasNextPage =
-        variantsJson?.data?.product?.variants?.pageInfo?.hasNextPage || false;
+        hasNextPage =
+          variantsJson?.data?.product?.variants?.pageInfo?.hasNextPage || false;
 
-      cursor = edges.length ? edges[edges.length - 1].cursor : null;
-    }
-
-    /*
-      IMPORTANT:
-      uploadedMediaIds order == imageArray order == variants order (from CSV aggregation)
-    */
-    for (const edge of shopify_variants) {
-
-      const variant = edge.node;
-
-      const colorOption = variant.selectedOptions.find(
-        (o: any) => o.name === "Color"
-      );
-
-      if (!colorOption) continue;
-
-      const color = colorOption.value;
-
-      const imageUrl = colorImageMap.get(color);
-      const mediaId = imageUrlToMediaId.get(imageUrl);
-
-      if (mediaId) {
-        variantAssignments.push({
-          id: variant.id,
-          mediaId,
-        });
+        cursor = edges.length ? edges[edges.length - 1].cursor : null;
       }
-    }
 
-    console.log(variantAssignments, "variantAssignments______");
+      /*
+        IMPORTANT:
+        uploadedMediaIds order == imageArray order == variants order (from CSV aggregation)
+      */
+      for (const edge of shopify_variants) {
 
-    if (variantAssignments.length) {
-      await admin.graphql(
-        `#graphql
+        const variant = edge.node;
+
+        const colorOption = variant.selectedOptions.find(
+          (o: any) => o.name === "Color"
+        );
+
+        if (!colorOption) continue;
+
+        const color = colorOption.value;
+
+        const imageUrl = colorImageMap.get(color);
+        const mediaId = imageUrlToMediaId.get(imageUrl);
+
+        if (mediaId) {
+          variantAssignments.push({
+            id: variant.id,
+            mediaId,
+          });
+        }
+      }
+
+      console.log(variantAssignments, "variantAssignments______");
+
+      if (variantAssignments.length) {
+        await admin.graphql(
+          `#graphql
     mutation assignVariantMedia($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
       productVariantsBulkUpdate(productId: $productId, variants: $variants) {
         userErrors { field message }
       }
     }`,
-        { variables: { productId, variants: variantAssignments } }
-      );
-    }
-    /* STEP 7: PUBLISH PRODUCT USING ENV ARRAY */
+          { variables: { productId, variants: variantAssignments } }
+        );
+      }
+      /* STEP 7: PUBLISH PRODUCT USING ENV ARRAY */
 
-    let publicationIds: string[] = [];
+      let publicationIds: string[] = [];
 
-    try {
-      publicationIds = JSON.parse(
-        process.env.SHOPIFY_PUBLICATION_IDS || "[]"
-      );
-    } catch (err) {
-      console.error("Invalid SHOPIFY_PUBLICATION_IDS format in env");
-    }
+      try {
+        publicationIds = JSON.parse(
+          process.env.SHOPIFY_PUBLICATION_IDS || "[]"
+        );
+      } catch (err) {
+        console.error("Invalid SHOPIFY_PUBLICATION_IDS format in env");
+      }
 
-    if (!publicationIds.length) {
-      console.warn("No publication IDs configured");
-    } else {
-      const publishInputs = publicationIds.map((id) => ({
-        publicationId: id,
-      }));
+      if (!publicationIds.length) {
+        console.warn("No publication IDs configured");
+      } else {
+        const publishInputs = publicationIds.map((id) => ({
+          publicationId: id,
+        }));
 
-      const publishRes = await admin.graphql(
-        `#graphql
+        const publishRes = await admin.graphql(
+          `#graphql
     mutation publishProduct($id: ID!, $input: [PublicationInput!]!) {
       publishablePublish(id: $id, input: $input) {
         userErrors { field message }
       }
     }`,
-        {
-          variables: {
-            id: productId,
-            input: publishInputs,
-          },
+          {
+            variables: {
+              id: productId,
+              input: publishInputs,
+            },
+          }
+        );
+
+        const publishJson = await publishRes.json();
+        const publishErrors = publishJson?.data?.publishablePublish?.userErrors;
+
+        if (publishErrors?.length) {
+          console.error("Publish Errors:", publishErrors);
+        } else {
+          console.log("Product published successfully");
+          createdProducts.push(productId);
+          productIndex++;
         }
-      );
-
-      const publishJson = await publishRes.json();
-      const publishErrors = publishJson?.data?.publishablePublish?.userErrors;
-
-      if (publishErrors?.length) {
-        console.error("Publish Errors:", publishErrors);
-      } else {
-        console.log("Product published successfully");
       }
     }
-    return Response.json({ success: true, productId });
+    return Response.json({
+      success: true,
+      products: createdProducts,
+    });
   } catch (error) {
     return Response.json(
       { error: "Unexpected server error", details: String(error) },
