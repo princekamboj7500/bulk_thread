@@ -16,27 +16,28 @@ function extractStyleFromHandle(handle: string | null) {
 
   const parts = handle.toLowerCase().split("-").filter(Boolean);
 
-  const candidates = [];
+  const styles = [];
 
   for (const part of parts) {
     // must contain digit
     if (!/\d/.test(part)) continue;
 
-    // ignore small numeric tokens
+    // ignore single numbers like 1,4,5,7
     if (/^\d$/.test(part)) continue;
 
-    // ignore patterns like 1-4 or 5-in-1 pieces already split
-    if (part === "in") continue;
+    // ignore size units like 14l, 10oz
+    if (/^\d+(l|ml|oz)$/i.test(part)) continue;
 
-    // strong candidates (letters+numbers)
+    // valid style patterns
     if (/^[a-z]*\d+[a-z]*$/i.test(part)) {
-      candidates.push(part);
+      styles.push(part);
     }
   }
 
-  if (!candidates.length) return null;
+  if (!styles.length) return null;
+  styles.sort((a, b) => b.length - a.length);
 
-  return candidates[candidates.length - 1];
+  return styles[0];
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {

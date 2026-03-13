@@ -312,26 +312,30 @@ function extractStyle(handle) {
 
   const parts = handle.toLowerCase().split("-").filter(Boolean);
 
-  const candidates = [];
+  const styles = [];
 
   for (const part of parts) {
     // must contain digit
     if (!/\d/.test(part)) continue;
 
-    // ignore small numeric tokens like 1,2,3,4,5,6,7 etc
+    // ignore single numbers like 1,4,5,7
     if (/^\d$/.test(part)) continue;
 
-    // ignore patterns like 1-4 or 5-in-1 pieces already split
-    if (part === "in") continue;
+    // ignore size units like 14l, 10oz
+    if (/^\d+(l|ml|oz)$/i.test(part)) continue;
 
-    // strong candidates (letters+numbers)
+    // valid style patterns
     if (/^[a-z]*\d+[a-z]*$/i.test(part)) {
-      candidates.push(part);
+      styles.push(part);
     }
   }
 
-  if (!candidates.length) return null;
-  return candidates[candidates.length - 1];
+  if (!styles.length) return null;
+
+  // prefer longest style (112pl over 112)
+  styles.sort((a, b) => b.length - a.length);
+
+  return styles[0];
 }
 
 /* ---------------- Shopify GraphQL Helper ---------------- */
