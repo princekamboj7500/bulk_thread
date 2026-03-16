@@ -255,7 +255,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const createdProducts: string[] = [];
     const baseTitle = he.decode(baseProduct["PRODUCT_TITLE"] || "");
     const baseHandle = generateHandle(baseTitle, style);
-    const imageArray = Array.from(colorImageMap.values());
+    // const imageArray = Array.from(colorImageMap.values());
+
     for (const groupVariants of variantGroups) {
 
       // const groupColorSet = new Set<string>();
@@ -273,7 +274,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       // const groupSizes = [
       //   ...new Set(groupVariants.map(v => v.optionValues[1].name))
       // ].sort((a, b) => getSizeIndex(a) - getSizeIndex(b));
-
+      const imageArray = [
+        ...new Set(
+          groupVariants
+            .map(v => v.imageUrl)
+            .filter(Boolean)
+        )
+      ];
       const groupSizes = [
         ...new Set(groupVariants.map(v => v.optionValues[0].name))
       ].sort((a, b) => getSizeIndex(a) - getSizeIndex(b));
