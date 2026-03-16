@@ -99,17 +99,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const colorImageMap = new Map<string, string>();
     const colorSet = new Set<string>();
     const sizeSet = new Set<string>();
-    let rowCount = 0;
-    let styleCount = 0;
+
     for await (const line of rl) {
-      rowCount++;
       if (!line.trim() || line === "[" || line === "]") continue;
 
       const row = JSON.parse(line.replace(/,$/, ""));
       if (row["STYLE#"] !== style) continue;
-      if (row["STYLE#"] === style) {
-        styleCount++;
-      }
+
       if (!baseProduct) baseProduct = row;
 
       const colorName = row["COLOR_NAME"] || "Default";
@@ -140,8 +136,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         colorImageMap.set(colorName, imageUrl);
       }
     }
-    console.log("TOTAL CSV ROWS:", rowCount);
-    console.log("ROWS MATCHING STYLE:", styleCount);
+
     if (!baseProduct) {
       return Response.json({ error: "Product not found" }, { status: 404 });
     }
@@ -255,8 +250,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const createdProducts: string[] = [];
     const baseTitle = he.decode(baseProduct["PRODUCT_TITLE"] || "");
     const baseHandle = generateHandle(baseTitle, style);
-    // const imageArray = Array.from(colorImageMap.values());
-
+    const imageArray = Array.from(colorImageMap.values());
     for (const groupVariants of variantGroups) {
 
       // const groupColorSet = new Set<string>();
@@ -274,13 +268,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       // const groupSizes = [
       //   ...new Set(groupVariants.map(v => v.optionValues[1].name))
       // ].sort((a, b) => getSizeIndex(a) - getSizeIndex(b));
-      const imageArray = [
-        ...new Set(
-          groupVariants
-            .map(v => v.imageUrl)
-            .filter(Boolean)
-        )
-      ];
+
       const groupSizes = [
         ...new Set(groupVariants.map(v => v.optionValues[0].name))
       ].sort((a, b) => getSizeIndex(a) - getSizeIndex(b));
@@ -532,6 +520,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }`,
           { variables: { productId, variants: shopifyVariants } }
         );
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
 
       /* STEP 5: UPLOAD IMAGES */
@@ -648,11 +637,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
         const color = colorOption.value;
 
-        const variantData = groupVariants.find(
-          v => v.optionValues[1].name === color
-        );
-
-        const imageUrl = variantData?.imageUrl;
+        const imageUrl = colorImageMap.get(color);
         const mediaId = imageUrlToMediaId.get(imageUrl);
 
         if (mediaId) {
