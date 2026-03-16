@@ -99,13 +99,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const colorImageMap = new Map<string, string>();
     const colorSet = new Set<string>();
     const sizeSet = new Set<string>();
-
+    let rowCount = 0;
+    let styleCount = 0;
     for await (const line of rl) {
+      rowCount++;
       if (!line.trim() || line === "[" || line === "]") continue;
 
       const row = JSON.parse(line.replace(/,$/, ""));
       if (row["STYLE#"] !== style) continue;
-
+      if (row["STYLE#"] === style) {
+        styleCount++;
+      }
       if (!baseProduct) baseProduct = row;
 
       const colorName = row["COLOR_NAME"] || "Default";
@@ -136,7 +140,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         colorImageMap.set(colorName, imageUrl);
       }
     }
-
+    console.log("TOTAL CSV ROWS:", rowCount);
+    console.log("ROWS MATCHING STYLE:", styleCount);
     if (!baseProduct) {
       return Response.json({ error: "Product not found" }, { status: 404 });
     }
