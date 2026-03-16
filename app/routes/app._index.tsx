@@ -456,7 +456,15 @@ export default function Index() {
                     }
                   </s-table-body>
                 </s-table>
-
+                {products.length === 0 && <s-stack
+                  minBlockSize={innerHeight < 500 ? "200px" : "340px"}
+                  direction="block"
+                  alignItems="center"
+                  justifyContent="center"
+                  paddingBlock="large"
+                >
+                  <s-text color="subdued">No data found</s-text>
+                </s-stack>}
                 {/* Pagination only after load */}
                 <s-stack
                   gap="base"

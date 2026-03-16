@@ -13,7 +13,7 @@ function generateHandle(title: string, style: string) {
     .trim()
     .replace(/\s+/g, "-");
 
-const styleSlug = String(style).toLowerCase();
+  const styleSlug = String(style).toLowerCase();
 
   // ensure style always at end
   if (!cleanTitle.endsWith(styleSlug)) {
@@ -21,6 +21,23 @@ const styleSlug = String(style).toLowerCase();
   }
 
   return cleanTitle;
+}
+function getSizeIndex(size: string) {
+  const s = size.toUpperCase().trim();
+
+  if (s === "XS") return 0;
+  if (s === "S") return 1;
+  if (s === "M") return 2;
+  if (s === "L") return 3;
+  if (s === "XL") return 4;
+
+  const match = s.match(/^(\d+)XL$/);
+
+  if (match) {
+    return 4 + parseInt(match[1]);
+  }
+
+  return 999;
 }
 function chunkVariants(arr: any[], size: number) {
   const chunks = [];
@@ -93,7 +110,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       const colorName = row["COLOR_NAME"] || "Default";
       const sizeName = row["SIZE"] || "OS";
-      const key = `${colorName}||${sizeName}`;
+      const key = `${sizeName}||${colorName}`;
       const qty = parseInt(row["QTY"] || "0", 10);
       const imageUrl = row["FRONT_MODEL_IMAGE_URL"] || null;
 
@@ -106,8 +123,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         variantMap.set(key, {
           price: row["MAP_PRICING"] || "0",
           optionValues: [
-            { name: colorName, optionName: "Color" },
             { name: sizeName, optionName: "Size" },
+            { name: colorName, optionName: "Color" },
           ],
           inventoryItem: { sku: row["INVENTORY_KEY"], tracked: true },
           inventoryQuantities: [{ locationId, availableQuantity: qty }],
@@ -126,20 +143,57 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     // const variants = Array.from(variantMap.values());
     const variants = Array.from(variantMap.values()).sort((a, b) => {
-      const colorA = a.optionValues[0].name;
-      const colorB = b.optionValues[0].name;
+      // const colorA = a.optionValues[0].name;
+      // const colorB = b.optionValues[0].name;
 
-      const sizeA = a.optionValues[1].name;
-      const sizeB = b.optionValues[1].name;
+      // const sizeA = a.optionValues[1].name;
+      // const sizeB = b.optionValues[1].name;
+      const sizeA = a.optionValues[0].name;
+      const sizeB = b.optionValues[0].name;
 
-      if (colorA === colorB) {
-        return sizeA.localeCompare(sizeB);
+      const colorA = a.optionValues[1].name;
+      const colorB = b.optionValues[1].name;
+      // if (colorA === colorB) {
+      //   return getSizeIndex(sizeA) - getSizeIndex(sizeB);
+      // }
+
+      // return colorA.localeCompare(colorB);
+      if (sizeA === sizeB) {
+        return colorA.localeCompare(colorB);
       }
 
-      return colorA.localeCompare(colorB);
+      return getSizeIndex(sizeA) - getSizeIndex(sizeB);
     });
+    const MAX_VARIANTS = 250;
 
-    const variantGroups = chunkVariants(variants, 100);
+    const variantGroups: any[] = [];
+    let currentGroup: any[] = [];
+
+    const variantsByColor = new Map<string, any[]>();
+
+    for (const v of variants) {
+      const color = v.optionValues[1].name;
+
+      if (!variantsByColor.has(color)) {
+        variantsByColor.set(color, []);
+      }
+
+      variantsByColor.get(color)!.push(v);
+    }
+
+    for (const [, colorVariants] of variantsByColor) {
+
+      if (currentGroup.length + colorVariants.length > MAX_VARIANTS) {
+        variantGroups.push(currentGroup);
+        currentGroup = [];
+      }
+
+      currentGroup.push(...colorVariants);
+    }
+
+    if (currentGroup.length) {
+      variantGroups.push(currentGroup);
+    }
     /* STEP 1.5: FETCH TAXONOMY CATEGORY ID (ROBUST MATCHING) */
     let categoryId: string | null = null;
 
@@ -199,13 +253,29 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const imageArray = Array.from(colorImageMap.values());
     for (const groupVariants of variantGroups) {
 
-      const groupColorSet = new Set<string>();
-      const groupSizeSet = new Set<string>();
+      // const groupColorSet = new Set<string>();
+      // const groupSizeSet = new Set<string>();
 
-      groupVariants.forEach((v) => {
-        groupColorSet.add(v.optionValues[0].name);
-        groupSizeSet.add(v.optionValues[1].name);
-      });
+      // groupVariants.forEach((v) => {
+      //   groupColorSet.add(v.optionValues[0].name);
+      //   groupSizeSet.add(v.optionValues[1].name);
+      // });
+
+      // const groupColors = [
+      //   ...new Set(groupVariants.map(v => v.optionValues[0].name))
+      // ];
+
+      // const groupSizes = [
+      //   ...new Set(groupVariants.map(v => v.optionValues[1].name))
+      // ].sort((a, b) => getSizeIndex(a) - getSizeIndex(b));
+
+      const groupSizes = [
+        ...new Set(groupVariants.map(v => v.optionValues[0].name))
+      ].sort((a, b) => getSizeIndex(a) - getSizeIndex(b));
+
+      const groupColors = [
+        ...new Set(groupVariants.map(v => v.optionValues[1].name))
+      ];
       const title = baseTitle;
       const handle =
         productIndex === 0
@@ -238,9 +308,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                   value: baseProduct["SUBCATEGORY_NAME"] || "",
                 },
               ],
+              // productOptions: [
+              //   { name: "Color", values: groupColors.map(n => ({ name: n })) },
+              //   { name: "Size", values: groupSizes.map(n => ({ name: n })) },
+              // ],
               productOptions: [
-                { name: "Color", values: Array.from(groupColorSet).map((n) => ({ name: n })) },
-                { name: "Size", values: Array.from(groupSizeSet).map((n) => ({ name: n })) },
+                { name: "Size", values: groupSizes.map(n => ({ name: n })) },
+                { name: "Color", values: groupColors.map(n => ({ name: n })) },
               ],
             },
           },

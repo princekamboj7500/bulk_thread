@@ -4,12 +4,15 @@ import readline from "readline";
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import he from "he";
-import prisma from "app/db.server";
 
 const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
 const PAGE_SIZE = 50;
 
-/* ---------------- STYLE EXTRACTOR (Handle Based) ---------------- */
+/* ---------------- MEMORY CACHE ---------------- */
+
+let sanmarCache: any[] | null = null;
+
+/* ---------------- STYLE EXTRACTOR ---------------- */
 
 function extractStyleFromHandle(handle: string | null) {
   if (!handle) return null;
@@ -19,37 +22,28 @@ function extractStyleFromHandle(handle: string | null) {
   const styles = [];
 
   for (const part of parts) {
-    // must contain digit
     if (!/\d/.test(part)) continue;
 
-    // ignore single numbers like 1,4,5,7
     if (/^\d$/.test(part)) continue;
-
-    // ignore size units like 14l, 10oz
     if (/^\d+(l|ml|oz)$/i.test(part)) continue;
-
-    // valid style patterns
     if (/^[a-z]*\d+[a-z]*$/i.test(part)) {
       styles.push(part);
     }
   }
-
   if (!styles.length) return null;
   styles.sort((a, b) => b.length - a.length);
 
   return styles[0].toUpperCase();
 }
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+/* ---------------- LOAD SANMAR CACHE (ONLY ONCE) ---------------- */
 
-  const url = new URL(request.url);
-  const page = parseInt(url.searchParams.get("page") || "1", 10);
-  const search = (url.searchParams.get("search") || "").toLowerCase();
-  const filter = url.searchParams.get("filter") || "all";
+async function loadSanmarCache() {
+  if (sanmarCache) return sanmarCache;
 
   if (!fs.existsSync(CACHE_FILE)) {
-    return Response.json({ products: [], page: 1, totalPages: 1 });
+    sanmarCache = [];
+    return sanmarCache;
   }
 
   const fileStream = fs.createReadStream(CACHE_FILE, { encoding: "utf8" });
@@ -71,19 +65,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     if (!style) continue;
 
     const title = he.decode(row["PRODUCT_TITLE"] || "");
-    const styleStr = String(style).toLowerCase();
-    const category = (row["CATEGORY_NAME"] || "").toLowerCase();
-
-    if (
-      search &&
-      !title.toLowerCase().includes(search) &&
-      !styleStr.includes(search) &&
-      !category.includes(search)
-    ) {
-      continue;
-    }
-
-    /* ---------------- CREATE PRODUCT GROUP ---------------- */
 
     if (!map.has(style)) {
       map.set(style, {
@@ -103,35 +84,43 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     const product = map.get(style);
 
-    /* ---------------- VARIANT KEY (COLOR + SIZE BASED) ---------------- */
-
     const color = row["COLOR_NAME"] || "Default";
     const size = row["SIZE"] || "OS";
 
     const variantKey = `${color}-${size}`;
-
     const qty = parseInt(row["QTY"] || "0", 10);
-
-    /* ---------------- DUPLICATE CHECK ---------------- */
 
     if (!product.seenVariants.has(variantKey)) {
       product.seenVariants.add(variantKey);
-
       product.totalVariants += 1;
       product.totalInventory += qty;
     }
   }
 
-  /* remove helper set before response */
-
-  const grouped = Array.from(map.values()).map((p) => {
+  sanmarCache = Array.from(map.values()).map((p) => {
     delete p.seenVariants;
     return p;
   });
 
+  return sanmarCache;
+}
+
+/* ---------------- LOADER ---------------- */
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const { admin } = await authenticate.admin(request);
+
+  const url = new URL(request.url);
+  const page = parseInt(url.searchParams.get("page") || "1", 10);
+  const search = (url.searchParams.get("search") || "").toLowerCase();
+  const filter = url.searchParams.get("filter") || "all";
+
+  /* Sanmar cache load */
+  const grouped = await loadSanmarCache();
+
   /* ---------------- FETCH SHOPIFY PRODUCTS ---------------- */
 
-  let typeToIdMap: Record<string, string[]> = {};
+  const typeToIdMap: Record<string, string[]> = {};
 
   let hasNextPage = true;
   let cursor: string | null = null;
@@ -153,9 +142,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           }
         }
       }`,
-      {
-        variables: { cursor },
-      }
+      { variables: { cursor } }
     );
 
     const json = await res.json();
@@ -164,7 +151,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     for (const edge of products) {
       const handle = edge.node.handle;
-
       const style = extractStyleFromHandle(handle);
 
       if (style) {
@@ -180,9 +166,27 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     cursor = json?.data?.products?.pageInfo?.endCursor;
   }
 
+  /* ---------------- SEARCH ---------------- */
+
+  let filtered = grouped;
+
+  if (search) {
+    filtered = filtered.filter((p) => {
+      const title = (p.title || "").toLowerCase();
+      const style = String(p.style || "").toLowerCase();
+      const category = (p.category || "").toLowerCase();
+
+      return (
+        title.includes(search) ||
+        style.includes(search) ||
+        category.includes(search)
+      );
+    });
+  }
+
   /* ---------------- MAP SANMAR PRODUCTS ---------------- */
 
-  let finalProducts = grouped.map((p) => {
+  let finalProducts = filtered.map((p) => {
     const productIds = typeToIdMap[String(p.style).toUpperCase()] || [];
 
     return {
@@ -205,7 +209,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   /* ---------------- PAGINATION ---------------- */
 
   const totalPages = Math.ceil(finalProducts.length / PAGE_SIZE);
-
   const start = (page - 1) * PAGE_SIZE;
 
   const paginated = finalProducts.slice(start, start + PAGE_SIZE);
