@@ -648,7 +648,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
         const color = colorOption.value;
 
-        const imageUrl = colorImageMap.get(color);
+        const variantData = groupVariants.find(
+          v => v.optionValues[1].name === color
+        );
+
+        const imageUrl = variantData?.imageUrl;
         const mediaId = imageUrlToMediaId.get(imageUrl);
 
         if (mediaId) {
