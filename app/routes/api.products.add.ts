@@ -250,7 +250,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const createdProducts: string[] = [];
     const baseTitle = he.decode(baseProduct["PRODUCT_TITLE"] || "");
     const baseHandle = generateHandle(baseTitle, style);
-    // const imageArray = Array.from(colorImageMap.values());
+    const imageArray = Array.from(colorImageMap.values());
     for (const groupVariants of variantGroups) {
 
       // const groupColorSet = new Set<string>();
@@ -269,7 +269,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       //   ...new Set(groupVariants.map(v => v.optionValues[1].name))
       // ].sort((a, b) => getSizeIndex(a) - getSizeIndex(b));
 
-
       const groupSizes = [
         ...new Set(groupVariants.map(v => v.optionValues[0].name))
       ].sort((a, b) => getSizeIndex(a) - getSizeIndex(b));
@@ -277,9 +276,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const groupColors = [
         ...new Set(groupVariants.map(v => v.optionValues[1].name))
       ];
-      const groupImageArray = groupColors
-        .map(color => colorImageMap.get(color))
-        .filter(Boolean);
       const title = baseTitle;
       const handle =
         productIndex === 0
@@ -524,71 +520,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }`,
           { variables: { productId, variants: shopifyVariants } }
         );
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
 
-      let allVariantsReady = false;
-
-      for (let i = 0; i < 6; i++) {
-        let tempVariants: any[] = [];
-        let hasNextPage = true;
-        let cursor: string | null = null;
-
-        while (hasNextPage) {
-          const variantsRes = await admin.graphql(
-            `#graphql
-      query getVariants($id: ID!, $cursor: String) {
-        product(id: $id) {
-          variants(first: 250, after: $cursor) {
-            edges {
-              cursor
-              node {
-                id
-                selectedOptions {
-                  name
-                  value
-                }
-              }
-            }
-            pageInfo {
-              hasNextPage
-            }
-          }
-        }
-      }`,
-            { variables: { id: productId, cursor } }
-          );
-
-          const variantsJson = await variantsRes.json();
-          const edges = variantsJson?.data?.product?.variants?.edges || [];
-
-          tempVariants.push(...edges);
-
-          hasNextPage =
-            variantsJson?.data?.product?.variants?.pageInfo?.hasNextPage || false;
-
-          cursor = edges.length ? edges[edges.length - 1].cursor : null;
-        }
-
-        if (tempVariants.length === groupVariants.length) {
-          allVariantsReady = true;
-          break;
-        }
-
-        await new Promise(r => setTimeout(r, 2000));
-      }
-
-      if (!allVariantsReady) {
-        console.warn("Variants not fully ready", {
-          expected: groupVariants.length,
-        });
-      }
       /* STEP 5: UPLOAD IMAGES */
 
 
       let uploadedMediaIds: string[] = [];
       const imageUrlToMediaId = new Map<string, string>();
 
-      if (groupImageArray.length) {
+      if (imageArray.length) {
 
         const mediaRes = await admin.graphql(
           `#graphql
@@ -612,67 +553,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           {
             variables: {
               product: { id: productId },
-              // media: imageArray.map((url) => ({
-              //   mediaContentType: "IMAGE",
-              //   originalSource: url,
-              // })),
-              media: groupImageArray.map((url) => ({
+              media: imageArray.map((url) => ({
                 mediaContentType: "IMAGE",
                 originalSource: url,
-              }))
+              })),
             },
           }
         );
 
         const mediaJson = await mediaRes.json();
-        // const edges = mediaJson?.data?.productUpdate?.product?.media?.edges || [];
-        let mediaReady = false;
-        let mediaEdges: any[] = [];
+        const edges = mediaJson?.data?.productUpdate?.product?.media?.edges || [];
 
-        for (let i = 0; i < 5; i++) {
-          const checkRes = await admin.graphql(`
-    query getMedia($id: ID!) {
-      product(id: $id) {
-        media(first: 100) {
-          edges {
-            node {
-              ... on MediaImage {
-                id
-                status
-              }
-            }
-          }
-        }
-      }
-    }
-  `, { variables: { id: productId } });
+        uploadedMediaIds = edges.map((e: any) => e.node.id);
 
-          const checkJson = await checkRes.json();
-          const edges = checkJson?.data?.product?.media?.edges || [];
-
-          const allReady = edges.every((e: any) => e.node.status === "READY");
-
-          if (allReady && edges.length) {
-            mediaEdges = edges;
-            mediaReady = true;
-            break;
-          }
-
-          await new Promise(r => setTimeout(r, 2000));
-        }
-
-        if (!mediaReady) {
-          console.warn("Media not fully ready");
-        }
-        // uploadedMediaIds = edges.map((e: any) => e.node.id);
-        uploadedMediaIds = mediaEdges.map((e: any) => e.node.id);
         /* CREATE URL → MEDIA MAP */
-        // uploadedMediaIds.forEach((mediaId, index) => {
-        //   const url = imageArray[index];
-        //   imageUrlToMediaId.set(url, mediaId);
-        // });
         uploadedMediaIds.forEach((mediaId, index) => {
-          const url = groupImageArray[index];
+          const url = imageArray[index];
           imageUrlToMediaId.set(url, mediaId);
         });
 
