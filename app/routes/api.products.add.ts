@@ -250,7 +250,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const createdProducts: string[] = [];
     const baseTitle = he.decode(baseProduct["PRODUCT_TITLE"] || "");
     const baseHandle = generateHandle(baseTitle, style);
-    const imageArray = Array.from(colorImageMap.values());
+    // const imageArray = Array.from(colorImageMap.values());
     for (const groupVariants of variantGroups) {
 
       // const groupColorSet = new Set<string>();
@@ -269,6 +269,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       //   ...new Set(groupVariants.map(v => v.optionValues[1].name))
       // ].sort((a, b) => getSizeIndex(a) - getSizeIndex(b));
 
+
       const groupSizes = [
         ...new Set(groupVariants.map(v => v.optionValues[0].name))
       ].sort((a, b) => getSizeIndex(a) - getSizeIndex(b));
@@ -276,6 +277,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const groupColors = [
         ...new Set(groupVariants.map(v => v.optionValues[1].name))
       ];
+      const groupImageArray = groupColors
+        .map(color => colorImageMap.get(color))
+        .filter(Boolean);
       const title = baseTitle;
       const handle =
         productIndex === 0
@@ -529,7 +533,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       let uploadedMediaIds: string[] = [];
       const imageUrlToMediaId = new Map<string, string>();
 
-      if (imageArray.length) {
+      if (groupImageArray.length) {
 
         const mediaRes = await admin.graphql(
           `#graphql
@@ -553,22 +557,67 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           {
             variables: {
               product: { id: productId },
-              media: imageArray.map((url) => ({
+              // media: imageArray.map((url) => ({
+              //   mediaContentType: "IMAGE",
+              //   originalSource: url,
+              // })),
+              media: groupImageArray.map((url) => ({
                 mediaContentType: "IMAGE",
                 originalSource: url,
-              })),
+              }))
             },
           }
         );
 
         const mediaJson = await mediaRes.json();
-        const edges = mediaJson?.data?.productUpdate?.product?.media?.edges || [];
+        // const edges = mediaJson?.data?.productUpdate?.product?.media?.edges || [];
+        let mediaReady = false;
+        let mediaEdges: any[] = [];
 
-        uploadedMediaIds = edges.map((e: any) => e.node.id);
+        for (let i = 0; i < 5; i++) {
+          const checkRes = await admin.graphql(`
+    query getMedia($id: ID!) {
+      product(id: $id) {
+        media(first: 100) {
+          edges {
+            node {
+              ... on MediaImage {
+                id
+                status
+              }
+            }
+          }
+        }
+      }
+    }
+  `, { variables: { id: productId } });
 
+          const checkJson = await checkRes.json();
+          const edges = checkJson?.data?.product?.media?.edges || [];
+
+          const allReady = edges.every((e: any) => e.node.status === "READY");
+
+          if (allReady && edges.length) {
+            mediaEdges = edges;
+            mediaReady = true;
+            break;
+          }
+
+          await new Promise(r => setTimeout(r, 2000));
+        }
+
+        if (!mediaReady) {
+          console.warn("Media not fully ready");
+        }
+        // uploadedMediaIds = edges.map((e: any) => e.node.id);
+        uploadedMediaIds = mediaEdges.map((e: any) => e.node.id);
         /* CREATE URL → MEDIA MAP */
+        // uploadedMediaIds.forEach((mediaId, index) => {
+        //   const url = imageArray[index];
+        //   imageUrlToMediaId.set(url, mediaId);
+        // });
         uploadedMediaIds.forEach((mediaId, index) => {
-          const url = imageArray[index];
+          const url = groupImageArray[index];
           imageUrlToMediaId.set(url, mediaId);
         });
 
