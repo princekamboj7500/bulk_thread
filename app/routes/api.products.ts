@@ -1,242 +1,18 @@
-// import fs from "fs";
-// import path from "path";
-// import readline from "readline";
-// import type { LoaderFunctionArgs } from "react-router";
-// import { authenticate } from "../shopify.server";
-// import he from "he";
-
-// const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
-// const PAGE_SIZE = 50;
-
-// /* ---------------- MEMORY CACHE ---------------- */
-
-// let sanmarCache: any[] | null = null;
-
-// /* ---------------- STYLE EXTRACTOR ---------------- */
-
-// function extractStyleFromHandle(handle: string | null) {
-//   if (!handle) return null;
-
-//   const parts = handle.toLowerCase().split("-").filter(Boolean);
-
-//   const styles = [];
-
-//   for (const part of parts) {
-//     if (!/\d/.test(part)) continue;
-
-//     if (/^\d$/.test(part)) continue;
-//     if (/^\d+(l|ml|oz)$/i.test(part)) continue;
-//     if (/^[a-z]*\d+[a-z]*$/i.test(part)) {
-//       styles.push(part);
-//     }
-//   }
-//   if (!styles.length) return null;
-//   styles.sort((a, b) => b.length - a.length);
-
-//   return styles[0].toUpperCase();
-// }
-
-// /* ---------------- LOAD SANMAR CACHE (ONLY ONCE) ---------------- */
-
-// async function loadSanmarCache() {
-//   if (sanmarCache) return sanmarCache;
-
-//   if (!fs.existsSync(CACHE_FILE)) {
-//     sanmarCache = [];
-//     return sanmarCache;
-//   }
-
-//   const fileStream = fs.createReadStream(CACHE_FILE, { encoding: "utf8" });
-
-//   const rl = readline.createInterface({
-//     input: fileStream,
-//     crlfDelay: Infinity,
-//   });
-
-//   const map = new Map<string, any>();
-
-//   for await (const line of rl) {
-//     if (!line.trim() || line === "[" || line === "]") continue;
-
-//     const clean = line.replace(/,$/, "");
-//     const row = JSON.parse(clean);
-
-//     const style = row["STYLE#"];
-//     if (!style) continue;
-
-//     const title = he.decode(row["PRODUCT_TITLE"] || "");
-
-//     if (!map.has(style)) {
-//       map.set(style, {
-//         style,
-//         title,
-//         category: row["CATEGORY_NAME"],
-//         totalVariants: 0,
-//         totalInventory: 0,
-//         seenVariants: new Set(),
-//         image:
-//           row["FRONT_MODEL_IMAGE_URL"] ||
-//           (row["PRODUCT_IMAGE"]
-//             ? `https://cdnm.sanmar.com/imglib/mresjpg/${row["PRODUCT_IMAGE"]}`
-//             : null),
-//       });
-//     }
-
-//     const product = map.get(style);
-
-//     const color = row["COLOR_NAME"] || "Default";
-//     const size = row["SIZE"] || "OS";
-
-//     const variantKey = `${color}-${size}`;
-//     const qty = parseInt(row["QTY"] || "0", 10);
-
-//     if (!product.seenVariants.has(variantKey)) {
-//       product.seenVariants.add(variantKey);
-//       product.totalVariants += 1;
-//       product.totalInventory += qty;
-//     }
-//   }
-
-//   sanmarCache = Array.from(map.values()).map((p) => {
-//     delete p.seenVariants;
-//     return p;
-//   });
-
-//   return sanmarCache;
-// }
-
-// /* ---------------- LOADER ---------------- */
-
-// export const loader = async ({ request }: LoaderFunctionArgs) => {
-//   const { admin } = await authenticate.admin(request);
-
-//   const url = new URL(request.url);
-//   const page = parseInt(url.searchParams.get("page") || "1", 10);
-//   const search = (url.searchParams.get("search") || "").toLowerCase();
-//   const filter = url.searchParams.get("filter") || "all";
-
-//   /* Sanmar cache load */
-//   const grouped = await loadSanmarCache();
-
-//   /* ---------------- FETCH SHOPIFY PRODUCTS ---------------- */
-
-//   const typeToIdMap: Record<string, string[]> = {};
-
-//   let hasNextPage = true;
-//   let cursor: string | null = null;
-
-//   while (hasNextPage) {
-//     const res = await admin.graphql(
-//       `#graphql
-//       query getProducts($cursor: String) {
-//         products(first: 250, after: $cursor) {
-//           pageInfo {
-//             hasNextPage
-//             endCursor
-//           }
-//           edges {
-//             node {
-//               id
-//               handle
-//             }
-//           }
-//         }
-//       }`,
-//       { variables: { cursor } }
-//     );
-
-//     const json = await res.json();
-
-//     const products = json?.data?.products?.edges || [];
-
-//     for (const edge of products) {
-//       const handle = edge.node.handle;
-//       const style = extractStyleFromHandle(handle);
-
-//       if (style) {
-//         if (!typeToIdMap[style]) {
-//           typeToIdMap[style] = [];
-//         }
-
-//         typeToIdMap[style].push(edge.node.id);
-//       }
-//     }
-
-//     hasNextPage = json?.data?.products?.pageInfo?.hasNextPage;
-//     cursor = json?.data?.products?.pageInfo?.endCursor;
-//   }
-
-//   /* ---------------- SEARCH ---------------- */
-
-//   let filtered = grouped;
-
-//   if (search) {
-//     filtered = filtered.filter((p) => {
-//       const title = (p.title || "").toLowerCase();
-//       const style = String(p.style || "").toLowerCase();
-//       const category = (p.category || "").toLowerCase();
-
-//       return (
-//         title.includes(search) ||
-//         style.includes(search) ||
-//         category.includes(search)
-//       );
-//     });
-//   }
-
-//   /* ---------------- MAP SANMAR PRODUCTS ---------------- */
-
-//   let finalProducts = filtered.map((p) => {
-//     const productIds = typeToIdMap[String(p.style).toUpperCase()] || [];
-
-//     return {
-//       ...p,
-//       existsInStore: productIds.length > 0,
-//       productIds,
-//     };
-//   });
-
-//   /* ---------------- FILTER ---------------- */
-
-//   if (filter === "added") {
-//     finalProducts = finalProducts.filter((p) => p.existsInStore);
-//   }
-
-//   if (filter === "not_added") {
-//     finalProducts = finalProducts.filter((p) => !p.existsInStore);
-//   }
-
-//   /* ---------------- PAGINATION ---------------- */
-
-//   const totalPages = Math.ceil(finalProducts.length / PAGE_SIZE);
-//   const start = (page - 1) * PAGE_SIZE;
-
-//   const paginated = finalProducts.slice(start, start + PAGE_SIZE);
-
-//   return Response.json({
-//     products: paginated,
-//     page,
-//     totalPages,
-//   });
-// };
-
-
-
-
-
-
 import fs from "fs";
 import path from "path";
 import readline from "readline";
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import he from "he";
-import prisma from "app/db.server";
 
 const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
 const PAGE_SIZE = 50;
 
-/* ---------------- STYLE EXTRACTOR (Handle Based) ---------------- */
+/* ---------------- MEMORY CACHE ---------------- */
+
+let sanmarCache: any[] | null = null;
+let cacheLoaded = false;
+/* ---------------- STYLE EXTRACTOR ---------------- */
 
 function extractStyleFromHandle(handle: string | null) {
   if (!handle) return null;
@@ -246,38 +22,33 @@ function extractStyleFromHandle(handle: string | null) {
   const styles = [];
 
   for (const part of parts) {
-    // must contain digit
     if (!/\d/.test(part)) continue;
 
-    // ignore single numbers like 1,4,5,7
     if (/^\d$/.test(part)) continue;
-
-    // ignore size units like 14l, 10oz
     if (/^\d+(l|ml|oz)$/i.test(part)) continue;
-
-    // valid style patterns
     if (/^[a-z]*\d+[a-z]*$/i.test(part)) {
       styles.push(part);
     }
   }
-
   if (!styles.length) return null;
   styles.sort((a, b) => b.length - a.length);
 
   return styles[0].toUpperCase();
 }
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+/* ---------------- LOAD SANMAR CACHE (ONLY ONCE) ---------------- */
 
-  const url = new URL(request.url);
-  const page = parseInt(url.searchParams.get("page") || "1", 10);
-  const search = (url.searchParams.get("search") || "").toLowerCase();
-  const filter = url.searchParams.get("filter") || "all";
+async function loadSanmarCache() {
+  if (sanmarCache && cacheLoaded) return sanmarCache;
 
   if (!fs.existsSync(CACHE_FILE)) {
-    return Response.json({ products: [], page: 1, totalPages: 1 });
+    console.error(" CACHE FILE NOT FOUND:", CACHE_FILE);
+    sanmarCache = [];
+    cacheLoaded = true;
+    return sanmarCache;
   }
+
+  console.log(" Loading cache from file...");
 
   const fileStream = fs.createReadStream(CACHE_FILE, { encoding: "utf8" });
 
@@ -291,74 +62,78 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   for await (const line of rl) {
     if (!line.trim() || line === "[" || line === "]") continue;
 
-    const clean = line.replace(/,$/, "");
-    const row = JSON.parse(clean);
+    try {
+      const clean = line.replace(/,$/, "");
+      const row = JSON.parse(clean);
 
-    const style = row["STYLE#"];
-    if (!style) continue;
+      const style = row["STYLE#"];
+      if (!style) continue;
 
-    const title = he.decode(row["PRODUCT_TITLE"] || "");
-    const styleStr = String(style).toLowerCase();
-    const category = (row["CATEGORY_NAME"] || "").toLowerCase();
+      const title = he.decode(row["PRODUCT_TITLE"] || "");
 
-    if (
-      search &&
-      !title.toLowerCase().includes(search) &&
-      !styleStr.includes(search) &&
-      !category.includes(search)
-    ) {
-      continue;
-    }
+      if (!map.has(style)) {
+        map.set(style, {
+          style,
+          title,
+          category: row["CATEGORY_NAME"],
+          totalVariants: 0,
+          totalInventory: 0,
+          seenVariants: new Set(),
+          image:
+            row["FRONT_MODEL_IMAGE_URL"] ||
+            (row["PRODUCT_IMAGE"]
+              ? `https://cdnm.sanmar.com/imglib/mresjpg/${row["PRODUCT_IMAGE"]}`
+              : null),
+        });
+      }
 
-    /* ---------------- CREATE PRODUCT GROUP ---------------- */
+      const product = map.get(style);
 
-    if (!map.has(style)) {
-      map.set(style, {
-        style,
-        title,
-        category: row["CATEGORY_NAME"],
-        totalVariants: 0,
-        totalInventory: 0,
-        seenVariants: new Set(),
-        image:
-          row["FRONT_MODEL_IMAGE_URL"] ||
-          (row["PRODUCT_IMAGE"]
-            ? `https://cdnm.sanmar.com/imglib/mresjpg/${row["PRODUCT_IMAGE"]}`
-            : null),
-      });
-    }
+      const color = row["COLOR_NAME"] || "Default";
+      const size = row["SIZE"] || "OS";
 
-    const product = map.get(style);
+      const variantKey = `${color}-${size}`;
+      const qty = parseInt(row["QTY"] || "0", 10);
 
-    /* ---------------- VARIANT KEY (COLOR + SIZE BASED) ---------------- */
-
-    const color = row["COLOR_NAME"] || "Default";
-    const size = row["SIZE"] || "OS";
-
-    const variantKey = `${color}-${size}`;
-
-    const qty = parseInt(row["QTY"] || "0", 10);
-
-    /* ---------------- DUPLICATE CHECK ---------------- */
-
-    if (!product.seenVariants.has(variantKey)) {
-      product.seenVariants.add(variantKey);
-
-      product.totalVariants += 1;
-      product.totalInventory += qty;
+      if (!product.seenVariants.has(variantKey)) {
+        product.seenVariants.add(variantKey);
+        product.totalVariants += 1;
+        product.totalInventory += qty;
+      }
+    } catch (err) {
+      console.error(" JSON PARSE ERROR:", err);
     }
   }
 
-  /* remove helper set before response */
-
-  const grouped = Array.from(map.values()).map((p) => {
+  sanmarCache = Array.from(map.values()).map((p) => {
     delete p.seenVariants;
     return p;
   });
 
+  cacheLoaded = true;
+
+  console.log(" Cache loaded:", sanmarCache.length);
+
+  return sanmarCache;
+}
+
+/* ---------------- LOADER ---------------- */
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+
+  const { admin } = await authenticate.admin(request);
+  console.log("CACHE FILE PATH:", CACHE_FILE);
+  const url = new URL(request.url);
+  const page = parseInt(url.searchParams.get("page") || "1", 10);
+  const search = (url.searchParams.get("search") || "").toLowerCase();
+  const filter = url.searchParams.get("filter") || "all";
+
+  /* Sanmar cache load */
+  const grouped = await loadSanmarCache();
+
   /* ---------------- FETCH SHOPIFY PRODUCTS ---------------- */
 
-  let typeToIdMap: Record<string, string[]> = {};
+  const typeToIdMap: Record<string, string[]> = {};
 
   let hasNextPage = true;
   let cursor: string | null = null;
@@ -380,9 +155,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           }
         }
       }`,
-      {
-        variables: { cursor },
-      }
+      { variables: { cursor } }
     );
 
     const json = await res.json();
@@ -391,7 +164,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
     for (const edge of products) {
       const handle = edge.node.handle;
-
       const style = extractStyleFromHandle(handle);
 
       if (style) {
@@ -407,9 +179,27 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     cursor = json?.data?.products?.pageInfo?.endCursor;
   }
 
+  /* ---------------- SEARCH ---------------- */
+
+  let filtered = grouped;
+
+  if (search) {
+    filtered = filtered.filter((p) => {
+      const title = (p.title || "").toLowerCase();
+      const style = String(p.style || "").toLowerCase();
+      const category = (p.category || "").toLowerCase();
+
+      return (
+        title.includes(search) ||
+        style.includes(search) ||
+        category.includes(search)
+      );
+    });
+  }
+
   /* ---------------- MAP SANMAR PRODUCTS ---------------- */
 
-  let finalProducts = grouped.map((p) => {
+  let finalProducts = filtered.map((p) => {
     const productIds = typeToIdMap[String(p.style).toUpperCase()] || [];
 
     return {
@@ -432,7 +222,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   /* ---------------- PAGINATION ---------------- */
 
   const totalPages = Math.ceil(finalProducts.length / PAGE_SIZE);
-
   const start = (page - 1) * PAGE_SIZE;
 
   const paginated = finalProducts.slice(start, start + PAGE_SIZE);
