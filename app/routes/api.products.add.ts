@@ -520,7 +520,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }`,
           { variables: { productId, variants: shopifyVariants } }
         );
-        await new Promise(resolve => setTimeout(resolve, 3000));
       }
 
       /* STEP 5: UPLOAD IMAGES */
