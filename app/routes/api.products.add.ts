@@ -524,9 +524,64 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }`,
           { variables: { productId, variants: shopifyVariants } }
         );
-        await new Promise(resolve => setTimeout(resolve, 3000));
       }
 
+      let allVariantsReady = false;
+
+      for (let i = 0; i < 6; i++) {
+        let tempVariants: any[] = [];
+        let hasNextPage = true;
+        let cursor: string | null = null;
+
+        while (hasNextPage) {
+          const variantsRes = await admin.graphql(
+            `#graphql
+      query getVariants($id: ID!, $cursor: String) {
+        product(id: $id) {
+          variants(first: 250, after: $cursor) {
+            edges {
+              cursor
+              node {
+                id
+                selectedOptions {
+                  name
+                  value
+                }
+              }
+            }
+            pageInfo {
+              hasNextPage
+            }
+          }
+        }
+      }`,
+            { variables: { id: productId, cursor } }
+          );
+
+          const variantsJson = await variantsRes.json();
+          const edges = variantsJson?.data?.product?.variants?.edges || [];
+
+          tempVariants.push(...edges);
+
+          hasNextPage =
+            variantsJson?.data?.product?.variants?.pageInfo?.hasNextPage || false;
+
+          cursor = edges.length ? edges[edges.length - 1].cursor : null;
+        }
+
+        if (tempVariants.length === groupVariants.length) {
+          allVariantsReady = true;
+          break;
+        }
+
+        await new Promise(r => setTimeout(r, 2000));
+      }
+
+      if (!allVariantsReady) {
+        console.warn("Variants not fully ready", {
+          expected: groupVariants.length,
+        });
+      }
       /* STEP 5: UPLOAD IMAGES */
 
 
