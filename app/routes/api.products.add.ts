@@ -48,6 +48,19 @@ function chunkVariants(arr: any[], size: number) {
 
   return chunks;
 }
+function logShopifyErrors(json: any, label: string) {
+  const root = json?.data && Object.values(json.data)[0];
+  const errors = root?.userErrors;
+
+  if (errors?.length) {
+    console.error(`❌ ${label} ERRORS:`);
+    errors.forEach((e: any) => {
+      console.error(`- ${e.field?.join(".") || "field"}: ${e.message}`);
+    });
+  } else {
+    console.log(`✅ ${label} SUCCESS`);
+  }
+}
 export const action = async ({ request }: ActionFunctionArgs) => {
   try {
     const { admin } = await authenticate.admin(request);
@@ -322,6 +335,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
 
       const productJson = await productRes.json();
+      logShopifyErrors(productJson, "PRODUCT CREATE");
       const createErrors = productJson?.data?.productCreate?.userErrors;
       if (createErrors?.length) {
         return Response.json({ error: "Product create failed", details: createErrors }, { status: 500 });
@@ -333,7 +347,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       /* STEP 3: UPDATE FIRST VARIANT (UNCHANGED) */
       const firstVariant = groupVariants[0];
-      await admin.graphql(
+      const updateRes = await admin.graphql(
         `#graphql
       mutation updateFirstVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
         productVariantsBulkUpdate(productId: $productId, variants: $variants) {
@@ -354,7 +368,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           },
         }
       );
-
+      const updateJson = await updateRes.json();
+      logShopifyErrors(updateJson, "FIRST VARIANT UPDATE");
       // /* STEP 3.1: INVENTORY (UNCHANGED) */
       // const invRes = await admin.graphql(
       //   `#graphql
@@ -464,7 +479,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       //   );
       // }
       /* one location */
-      await admin.graphql(
+      const activateRes = await admin.graphql(
         `#graphql
         mutation activateInventory($inventoryItemId: ID!, $locationId: ID!) {
           inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
@@ -475,9 +490,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       `,
         { variables: { inventoryItemId, locationId } }
       );
-
+      const activateJson = await activateRes.json();
+      logShopifyErrors(activateJson, "INVENTORY ACTIVATE");
       // set inventory only once
-      await admin.graphql(
+      const setInvRes = await admin.graphql(
         `#graphql
         mutation setInventory($input: InventorySetQuantitiesInput!) {
           inventorySetQuantities(input: $input) {
@@ -502,6 +518,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           },
         }
       );
+      const setInvJson = await setInvRes.json();
+      logShopifyErrors(setInvJson, "INVENTORY SET");
       /* STEP 4: CREATE REMAINING VARIANTS */
       const remainingVariants = groupVariants.slice(1);
       const shopifyVariants = remainingVariants.map(({ imageUrl, ...rest }) => rest);
@@ -509,8 +527,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       // shopifyVariants?.forEach((item) => {
       //   console.log(item?.inventoryQuantities, "inventory_quantitiessss_____");
       // });
-      if (shopifyVariants.length) {
-        await admin.graphql(
+      console.log("EXPECTED:", groupVariants.length);
+      console.log("SENDING:", shopifyVariants.length);
+      if (shopifyVariants?.length) {
+        const variantRes = await admin.graphql(
           `#graphql
         mutation createVariants($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
           productVariantsBulkCreate(productId: $productId, variants: $variants) {
@@ -520,6 +540,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }`,
           { variables: { productId, variants: shopifyVariants } }
         );
+        const variantJson = await variantRes.json();
+
+        logShopifyErrors(variantJson, "VARIANT CREATE");
       }
 
       /* STEP 5: UPLOAD IMAGES */
@@ -561,6 +584,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         );
 
         const mediaJson = await mediaRes.json();
+        logShopifyErrors(mediaJson, "MEDIA UPLOAD");
         const edges = mediaJson?.data?.productUpdate?.product?.media?.edges || [];
 
         uploadedMediaIds = edges.map((e: any) => e.node.id);
@@ -650,16 +674,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       console.log(variantAssignments, "variantAssignments______");
 
       if (variantAssignments.length) {
-        await admin.graphql(
+        const assignRes = await admin.graphql(
           `#graphql
-    mutation assignVariantMedia($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-        userErrors { field message }
-      }
-    }`,
+              mutation assignVariantMedia($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+                productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+                  userErrors { field message }
+                }
+              }`,
           { variables: { productId, variants: variantAssignments } }
         );
+        const assignJson = await assignRes.json();
+        logShopifyErrors(assignJson, "MEDIA ASSIGN");
       }
+
+
       /* STEP 7: PUBLISH PRODUCT USING ENV ARRAY */
 
       let publicationIds: string[] = [];
