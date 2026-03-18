@@ -212,9 +212,22 @@ export default function Index() {
     setPage(1);
     loadProducts(1, debouncedSearch);
   }, [filter]);
+  useEffect(() => {
+    const hasCreating = products.some((p) => p.isProcessing);
 
-  async function loadProducts(pageNumber: number, searchValue = search) {
-    setLoadingProducts(true);
+    if (!hasCreating) return;
+
+    const interval = setInterval(() => {
+      loadProducts(page, search, true);
+    }, 3000); // 3 sec
+
+    return () => clearInterval(interval);
+  }, [products, page]);
+  async function loadProducts(pageNumber: number, searchValue = search, isPolling = false) {
+    if (!isPolling) {
+      setLoadingProducts(true);
+    }
+    // setLoadingProducts(true);
 
     const res = await fetch(
       `/api/products?page=${pageNumber}&search=${encodeURIComponent(searchValue)}&filter=${filter}`
@@ -223,10 +236,26 @@ export default function Index() {
     const data = await res.json();
 
     setProducts(data.products || []);
+    // setProducts(prev => {
+    //   const newData = data.products || [];
+
+    //   return newData.map((newItem: any) => {
+    //     const existing = prev.find(p => p.style === newItem.style);
+
+    //     return {
+    //       ...newItem,
+    //       isCreating: newItem.existsInStore
+    //         ? false // auto stop
+    //         : existing?.isCreating || false,
+    //     };
+    //   });
+    // });
     setTotalPages(data.totalPages || 1);
     setPage(data.page || 1);
 
-    setLoadingProducts(false);
+    if (!isPolling) {
+      setLoadingProducts(false);
+    }
   }
   function startPolling() {
     const interval = setInterval(async () => {
@@ -263,7 +292,7 @@ export default function Index() {
       });
 
       shopify.toast.show("Products deleted from Shopify");
-      await loadProducts(page);
+      await loadProducts(page, search, true);
     } finally {
       setRowLoading(style, false);
       setSelectedProduct(null);
@@ -410,8 +439,86 @@ export default function Index() {
                             <s-table-cell>{p.totalVariants}</s-table-cell>
                             <s-table-cell>{p.totalInventory}</s-table-cell>
 
+                            {/* <s-table-cell>
+                              {p.isCreating ? (
+                                <s-button disabled loading>
+                                  add
+                                </s-button>
+                              ) : p.existsInStore ? (
+                                <s-button
+                                  tone="critical"
+                                  disabled={rowLoading}
+                                  {...(rowLoading ? { loading: true } : {})}
+                                  commandFor="delete-modal"
+                                  onClick={() => {
+                                    if (!p.productIds?.length) return;
+                                    setSelectedProduct(p);
+                                  }}
+                                >
+                                  Delete
+                                </s-button>
+                              ) : (
+                                <s-button
+                                  tone="auto"
+                                  disabled={rowLoading}
+                                  {...(rowLoading ? { loading: true } : {})}
+                                  // onClick={async () => {
+                                  //   setRowLoading(p.style, true);
+                                  //   try {
+                                  //     await fetch("/api/products/add", {
+                                  //       method: "POST",
+                                  //       body: JSON.stringify({ style: p.style }),
+                                  //       headers: { "Content-Type": "application/json" },
+                                  //     });
+
+                                  //     shopify.toast.show("Product creation started...");
+
+                                  //     // 🔥 IMPORTANT
+                                  //     await loadProducts(page);
+
+                                  //   } finally {
+                                  //     setRowLoading(p.style, false);
+                                  //   }
+                                  // }}
+                                  onClick={async () => {
+                                    setRowLoading(p.style, true);
+
+                                    // 🔥 ADD THIS (MOST IMPORTANT)
+                                    setProducts(prev =>
+                                      prev.map(item =>
+                                        item.style === p.style
+                                          ? { ...item, isCreating: true }
+                                          : item
+                                      )
+                                    );
+
+                                    try {
+                                      await fetch("/api/products/add", {
+                                        method: "POST",
+                                        body: JSON.stringify({ style: p.style }),
+                                        headers: { "Content-Type": "application/json" },
+                                      });
+
+                                      shopify.toast.show("Product creation started...");
+
+                                      // ❌ immediate reload hata bhi sakte ho (optional)
+                                      // await loadProducts(page);
+
+                                    } finally {
+                                      setRowLoading(p.style, false);
+                                    }
+                                  }}
+                                >
+                                  Add
+                                </s-button>
+                              )}
+                            </s-table-cell> */}
                             <s-table-cell>
-                              {p.existsInStore ? (
+                              {p.isProcessing ? (
+                                <s-button disabled loading>
+                                  add
+                                </s-button>
+                              ) : p.existsInStore ? (
                                 <s-button
                                   tone="critical"
                                   disabled={rowLoading}
@@ -431,6 +538,7 @@ export default function Index() {
                                   {...(rowLoading ? { loading: true } : {})}
                                   onClick={async () => {
                                     setRowLoading(p.style, true);
+
                                     try {
                                       await fetch("/api/products/add", {
                                         method: "POST",
@@ -438,8 +546,9 @@ export default function Index() {
                                         headers: { "Content-Type": "application/json" },
                                       });
 
-                                      shopify.toast.show("Product added to Shopify");
-                                      await loadProducts(page);
+                                      shopify.toast.show("Product creation started...");
+                                      await loadProducts(page, search, true);
+
                                     } finally {
                                       setRowLoading(p.style, false);
                                     }

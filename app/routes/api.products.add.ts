@@ -5,6 +5,8 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import he from "he";
 const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
+const STATUS_FILE = path.join(process.cwd(), "product-status.json");
+
 function generateHandle(title: string, style: string) {
   const cleanTitle = title
     .toLowerCase()
@@ -39,6 +41,41 @@ function getSizeIndex(size: string) {
 
   return 999;
 }
+function ensureStatusFile() {
+  try {
+    if (!fs.existsSync(STATUS_FILE)) {
+      fs.writeFileSync(STATUS_FILE, JSON.stringify({}, null, 2));
+    }
+  } catch (err) {
+    console.error("Ensure file error:", err);
+  }
+}
+
+function readStatusFile() {
+  try {
+    ensureStatusFile();
+    const data = fs.readFileSync(STATUS_FILE, "utf8");
+    return JSON.parse(data || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function writeStatusFile(data: any) {
+  try {
+    const temp = STATUS_FILE + ".tmp";
+    fs.writeFileSync(temp, JSON.stringify(data, null, 2));
+    fs.renameSync(temp, STATUS_FILE);
+  } catch (err) {
+    console.error("Write error:", err);
+  }
+}
+
+function setStyleStatus(style: string, status: boolean) {
+  const data = readStatusFile();
+  data[String(style).toUpperCase()] = status;
+  writeStatusFile(data);
+}
 function chunkVariants(arr: any[], size: number) {
   const chunks = [];
 
@@ -53,7 +90,7 @@ function logShopifyErrors(json: any, label: string) {
   const errors = root?.userErrors;
 
   if (errors?.length) {
-    console.error(`❌ ${label} ERRORS:`);
+    console.error(` ${label} ERRORS:`);
     errors.forEach((e: any) => {
       console.error(`- ${e.field?.join(".") || "field"}: ${e.message}`);
     });
@@ -61,26 +98,9 @@ function logShopifyErrors(json: any, label: string) {
     console.log(`✅ ${label} SUCCESS`);
   }
 }
-export const action = async ({ request }: ActionFunctionArgs) => {
+async function processProducts(admin: any, style: string) {
   try {
-    const { admin } = await authenticate.admin(request);
-    const { style } = await request.json();
-
-    if (!style) {
-      return Response.json({ error: "Missing style" }, { status: 400 });
-    }
-
-    /* STEP 0: LOCATION */
-    // const locRes = await admin.graphql(`
-    //   query {
-    //     locations(first: 1) {
-    //       edges { node { id } }
-    //     }
-    //   }
-    // `);
-
-    // const locJson = await locRes.json();
-    // const locationId = locJson?.data?.locations?.edges?.[0]?.node?.id;
+    setStyleStatus(style, true);
     const locRes = await admin.graphql(`
       query {
         locations(first: 50) {
@@ -94,13 +114,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       locJson?.data?.locations?.edges?.map((e: any) => e.node.id) || [];
 
     if (!locationIds.length) {
-      return Response.json({ error: "Failed to fetch shop locations" }, { status: 500 });
+      // return Response.json({ error: "Failed to fetch shop locations" }, { status: 500 });
+      console.error(" Failed to fetch shop locations");
+      setStyleStatus(style, false);
+      return;
     }
 
     /* keep first location for variant creation structure (unchanged logic) */
     const locationId = locationIds[0];
     if (!locationId) {
-      return Response.json({ error: "Failed to fetch shop location" }, { status: 500 });
+      console.error(" Failed to fetch shop location");
+      setStyleStatus(style, false);
+      return;
     }
 
     /* STEP 1: READ CACHE */
@@ -151,7 +176,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     if (!baseProduct) {
-      return Response.json({ error: "Product not found" }, { status: 404 });
+      // return Response.json({ error: "Product not found" }, { status: 404 });
+      console.error("Product not found");
+      setStyleStatus(style, false);
+      return;
     }
 
     // const variants = Array.from(variantMap.values());
@@ -261,6 +289,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     console.log("Category ID:", categoryId);
     let productIndex = 0;
     const createdProducts: string[] = [];
+    const productHandles: string[] = [];
     const baseTitle = he.decode(baseProduct["PRODUCT_TITLE"] || "");
     const baseHandle = generateHandle(baseTitle, style);
     const imageArray = Array.from(colorImageMap.values());
@@ -338,7 +367,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       logShopifyErrors(productJson, "PRODUCT CREATE");
       const createErrors = productJson?.data?.productCreate?.userErrors;
       if (createErrors?.length) {
-        return Response.json({ error: "Product create failed", details: createErrors }, { status: 500 });
+        // return Response.json({ error: "Product create failed", details: createErrors }, { status: 500 });
+        console.error("Product create failed", createErrors);
+        setStyleStatus(style, false);
+        return;
       }
 
       const productId = productJson.data.productCreate.product.id;
@@ -543,6 +575,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         const variantJson = await variantRes.json();
 
         logShopifyErrors(variantJson, "VARIANT CREATE");
+        const variantErrors = variantJson?.data?.productVariantsBulkCreate?.userErrors;
+
+        if (variantErrors?.length) {
+          console.error(" VARIANT CREATE FAILED", variantErrors);
+          setStyleStatus(style, false);
+          return; // yahin stop
+        }
       }
 
       /* STEP 5: UPLOAD IMAGES */
@@ -730,14 +769,111 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         } else {
           console.log("Product published successfully");
           createdProducts.push(productId);
+          productHandles.push(handle);
           productIndex++;
         }
       }
     }
+    if (createdProducts.length === 0) {
+      console.error("No products created successfully");
+      setStyleStatus(style, false);
+      return;
+    }
+    if (createdProducts.length <= 1) {
+      console.log("Single product — skipping merge metafields");
+      setStyleStatus(style, false);
+    } else {
+      if (createdProducts.length !== productHandles.length) {
+        console.error("Mismatch in products and handles. Skipping merge.");
+        setStyleStatus(style, false);
+        return;
+      }
+
+      const mainHandle = productHandles[0];
+      const otherHandles = productHandles.slice(1).join(",") || "";
+
+      console.log("Merging products:", {
+        mainHandle,
+        otherHandles,
+        total: createdProducts.length,
+      });
+
+      await Promise.all(
+        createdProducts.map((productId) =>
+          admin.graphql(
+            `#graphql
+        mutation setMetafields($metafields: [MetafieldsSetInput!]!) {
+          metafieldsSet(metafields: $metafields) {
+            userErrors { field message }
+          }
+        }
+        `,
+            {
+              variables: {
+                metafields: [
+                  {
+                    ownerId: productId,
+                    namespace: "api_integration",
+                    key: "main_product",
+                    type: "string",
+                    value: mainHandle,
+                  },
+                  {
+                    ownerId: productId,
+                    namespace: "api_integration",
+                    key: "other_products",
+                    type: "string",
+                    value: otherHandles,
+                  },
+                ],
+              },
+            }
+          )
+        )
+      );
+      setStyleStatus(style, false);
+    }
+  } catch (error) {
+    console.error(" BACKGROUND JOB ERROR:", error);
+    setStyleStatus(style, false);
+  }
+}
+export const action = async ({ request }: ActionFunctionArgs) => {
+  try {
+    const { admin } = await authenticate.admin(request);
+    const { style } = await request.json();
+
+    if (!style) {
+      return Response.json({ error: "Missing style" }, { status: 400 });
+    }
+
+    // processProducts(admin, style);
+
+    processProducts(admin, style).catch((err) => {
+      console.error(" Background crash:", err);
+    });
+
+    // ✅ instant response (no timeout)
     return Response.json({
       success: true,
-      products: createdProducts,
+      message: "Product creation started in background",
     });
+    /* STEP 0: LOCATION */
+    // const locRes = await admin.graphql(`
+    //   query {
+    //     locations(first: 1) {
+    //       edges { node { id } }
+    //     }
+    //   }
+    // `);
+
+    // const locJson = await locRes.json();
+    // const locationId = locJson?.data?.locations?.edges?.[0]?.node?.id;
+
+    // return Response.json({
+    //   success: true,
+    //   products: createdProducts,
+    // });
   } catch (error) {
     return Response.json(
       { error: "Unexpected server error", details: String(error) },

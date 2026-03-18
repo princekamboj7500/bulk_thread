@@ -4,7 +4,7 @@ import readline from "readline";
 import type { LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import he from "he";
-
+const STATUS_FILE = path.join(process.cwd(), "product-status.json");
 const CACHE_FILE = path.join(process.cwd(), "sanmar-cache.json");
 const PAGE_SIZE = 50;
 
@@ -13,7 +13,14 @@ const PAGE_SIZE = 50;
 let sanmarCache: any[] | null = null;
 let cacheLoaded = false;
 /* ---------------- STYLE EXTRACTOR ---------------- */
-
+function readStatusFile() {
+  try {
+    if (!fs.existsSync(STATUS_FILE)) return {};
+    return JSON.parse(fs.readFileSync(STATUS_FILE, "utf8") || "{}");
+  } catch {
+    return {};
+  }
+}
 function extractStyleFromHandle(handle: string | null) {
   if (!handle) return null;
 
@@ -127,7 +134,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const page = parseInt(url.searchParams.get("page") || "1", 10);
   const search = (url.searchParams.get("search") || "").toLowerCase();
   const filter = url.searchParams.get("filter") || "all";
-
+  const statusMap = readStatusFile();
   /* Sanmar cache load */
   const grouped = await loadSanmarCache();
 
@@ -199,13 +206,24 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   /* ---------------- MAP SANMAR PRODUCTS ---------------- */
 
+  // let finalProducts = filtered.map((p) => {
+  //   const productIds = typeToIdMap[String(p.style).toUpperCase()] || [];
+
+  //   return {
+  //     ...p,
+  //     existsInStore: productIds.length > 0,
+  //     productIds,
+  //   };
+  // });
   let finalProducts = filtered.map((p) => {
-    const productIds = typeToIdMap[String(p.style).toUpperCase()] || [];
+    const styleKey = String(p.style).toUpperCase();
+    const productIds = typeToIdMap[styleKey] || [];
 
     return {
       ...p,
       existsInStore: productIds.length > 0,
       productIds,
+      isProcessing: statusMap[styleKey] === true, // 👈 ONLY ADD THIS
     };
   });
 
