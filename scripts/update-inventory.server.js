@@ -290,7 +290,7 @@ async function runInventorySync(shop, token, file) {
       `Updating → Style: ${style}, Color: ${color}, Size: ${size}, Qty: ${qty}`,
     );
 
-    updates.push({ inventoryItemId, locationId, quantity: qty });
+    updates.push({ inventoryItemId, locationId, quantity: qty, ignoreCompareQuantity: true });
 
     if (updates.length >= 50) {
       await pushUpdates(shop, token,referenceDocumentUri, updates);
