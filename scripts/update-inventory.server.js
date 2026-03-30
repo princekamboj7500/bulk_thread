@@ -271,7 +271,7 @@ async function runInventorySync(shop, token, file) {
 
   const variantMap = await buildSkuMap(shop, token);
   let updates = [];
-
+  let referenceDocumentUri ="logistics://some.warehouse/take/2023-01-23T13:14:15Z"
   await processSanmar(file, async (row) => {
     const style = row["STYLE#"];
     const color = row["COLOR_NAME"] || "Default";
@@ -293,19 +293,19 @@ async function runInventorySync(shop, token, file) {
     updates.push({ inventoryItemId, locationId, quantity: qty });
 
     if (updates.length >= 50) {
-      await pushUpdates(shop, token, updates);
+      await pushUpdates(shop, token,referenceDocumentUri, updates);
       updates = [];
       await new Promise((r) => setTimeout(r, 500));
     }
   });
 
-  if (updates.length) await pushUpdates(shop, token, updates);
+  if (updates.length) await pushUpdates(shop, token, referenceDocumentUri, updates);
 
   console.log("Inventory sync complete.");
 }
 
 /* ---------------- Push Inventory Updates ---------------- */
-async function pushUpdates(shop, token, quantities) {
+async function pushUpdates(shop, token,referenceDocumentUri, quantities) {
   console.log("Updating batch:", quantities.length);
   let attempts = 3;
 
@@ -315,16 +315,28 @@ async function pushUpdates(shop, token, quantities) {
         shop,
         token,
         `
-        mutation setInventory($input: InventorySetOnHandQuantitiesInput!) {
-          inventorySetOnHandQuantities(input: $input) {
-            userErrors { message }
+        mutation InventorySet($input: InventorySetQuantitiesInput!) {
+          inventorySetQuantities(input: $input) {
+            inventoryAdjustmentGroup {
+              createdAt
+              reason
+              referenceDocumentUri
+              changes {
+                name
+                delta
+              }
+            }
+            userErrors {
+              field
+              message
+            }
           }
         }
         `,
-        { input: { reason: "correction", setQuantities: quantities } },
+        { input: { name: "available", reason: "correction",referenceDocumentUri:referenceDocumentUri, quantities: quantities } },
       );
 
-      const errors = res.inventorySetOnHandQuantities.userErrors;
+      const errors = res.inventorySetQuantities.userErrors;
 
       if (errors.length) {
         console.error("Shopify userErrors:", errors);
