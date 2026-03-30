@@ -308,28 +308,41 @@ async function runInventorySync(shop, token, file) {
 async function pushUpdates(shop, token, quantities) {
   console.log("Updating batch:", quantities.length);
   let attempts = 3;
-  while (attempts > 0) {}
-  try {
-    await shopifyGraphQL(
-      shop,
-      token,
-      `
-    mutation setInventory($input: InventorySetOnHandQuantitiesInput!) {
-      inventorySetOnHandQuantities(input: $input) {
-        userErrors { message }
+
+  while (attempts > 0) {
+    try {
+      const res = await shopifyGraphQL(
+        shop,
+        token,
+        `
+        mutation setInventory($input: InventorySetOnHandQuantitiesInput!) {
+          inventorySetOnHandQuantities(input: $input) {
+            userErrors { message }
+          }
+        }
+        `,
+        { input: { reason: "correction", setQuantities: quantities } },
+      );
+
+      const errors = res.inventorySetOnHandQuantities.userErrors;
+
+      if (errors.length) {
+        console.error("Shopify userErrors:", errors);
+      } else {
+        console.log(" Batch success");
       }
+
+      return;
+    } catch (err) {
+      attempts--;
+      console.error(`Batch retry left: ${attempts}`, err);
+
+      if (attempts === 0) {
+        console.error(" Final batch failed:", quantities);
+      }
+
+      await new Promise((r) => setTimeout(r, 2000));
     }
-    `,
-      { input: { reason: "correction", setQuantities: quantities } },
-    );
-    return;
-  } catch (err) {
-    attempts--;
-    console.error(`Batch retry left: ${attempts}`, err);
-    if (attempts === 0) {
-      console.error("Final batch failed:", quantities);
-    }
-    await new Promise((r) => setTimeout(r, 2000));
   }
 }
 
