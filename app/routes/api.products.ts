@@ -141,6 +141,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   /* ---------------- FETCH SHOPIFY PRODUCTS ---------------- */
 
   const typeToIdMap: Record<string, string[]> = {};
+  const typeToSyncMap: Record<string, string[]> = {};
 
   let hasNextPage = true;
   let cursor: string | null = null;
@@ -158,6 +159,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             node {
               id
               handle
+              metafield(namespace: "custom", key: "sync_status") {
+                value
+              }
             }
           }
         }
@@ -179,6 +183,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         }
 
         typeToIdMap[style].push(edge.node.id);
+        if (!typeToSyncMap[style]) {
+          typeToSyncMap[style] = [];
+        }
+        typeToSyncMap[style].push(edge.node.metafield?.value || null);
       }
     }
 
@@ -218,12 +226,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   let finalProducts = filtered.map((p) => {
     const styleKey = String(p.style).toUpperCase();
     const productIds = typeToIdMap[styleKey] || [];
+    const syncValues = typeToSyncMap[styleKey] || [];
 
     return {
       ...p,
       existsInStore: productIds.length > 0,
       productIds,
-      isProcessing: statusMap[styleKey] === true, // 👈 ONLY ADD THIS
+      isProcessing: statusMap[styleKey] === true,
+      sync_status: syncValues.some(v => v !== "false"),
     };
   });
 

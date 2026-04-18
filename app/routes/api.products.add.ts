@@ -349,6 +349,12 @@ async function processProducts(admin: any, style: string) {
                   type: "single_line_text_field",
                   value: baseProduct["SUBCATEGORY_NAME"] || "",
                 },
+                {
+                  namespace: "custom",
+                  key: "sync_status",
+                  type: "boolean",
+                  value: "true",
+                },
               ],
               // productOptions: [
               //   { name: "Color", values: groupColors.map(n => ({ name: n })) },

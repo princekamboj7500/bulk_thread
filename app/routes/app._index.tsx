@@ -291,7 +291,7 @@ export default function Index() {
         }),
       });
 
-      shopify.toast.show("Products deleted from Shopify");
+      shopify.toast.show("Products disconnected successfully");
       await loadProducts(page, search, true);
     } finally {
       setRowLoading(style, false);
@@ -513,7 +513,7 @@ export default function Index() {
                                 </s-button>
                               )}
                             </s-table-cell> */}
-                            <s-table-cell>
+                            {/* <s-table-cell>
                               {p.isProcessing ? (
                                 <s-button disabled loading>
                                   add
@@ -529,9 +529,87 @@ export default function Index() {
                                     setSelectedProduct(p);
                                   }}
                                 >
-                                  Delete
+                                  Disconnect
                                 </s-button>
                               ) : (
+                                <s-button
+                                  tone="auto"
+                                  disabled={rowLoading}
+                                  {...(rowLoading ? { loading: true } : {})}
+                                  onClick={async () => {
+                                    setRowLoading(p.style, true);
+
+                                    try {
+                                      await fetch("/api/products/add", {
+                                        method: "POST",
+                                        body: JSON.stringify({ style: p.style }),
+                                        headers: { "Content-Type": "application/json" },
+                                      });
+
+                                      shopify.toast.show("Product creation started...");
+                                      await loadProducts(page, search, true);
+
+                                    } finally {
+                                      setRowLoading(p.style, false);
+                                    }
+                                  }}
+                                >
+                                  Add
+                                </s-button>
+                              )}
+                            </s-table-cell> */}
+                            <s-table-cell>
+                              {p.isProcessing ? (
+                                <s-button disabled loading>
+                                  Processing
+                                </s-button>
+
+                              ) : p.existsInStore && !p.sync_status ? (
+                                <s-button
+                                  tone="neutral"
+                                  variant="primary"
+                                  disabled={rowLoading}
+                                  {...(rowLoading ? { loading: true } : {})}
+                                  onClick={async () => {
+                                    setRowLoading(p.style, true);
+
+                                    try {
+                                      await fetch("/api/products/connect", {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({
+                                          productIds: p.productIds,
+                                        }),
+                                      });
+
+                                      shopify.toast.show("Product connected successfully");
+                                      await loadProducts(page, search, true);
+
+                                    } finally {
+                                      setRowLoading(p.style, false);
+                                    }
+                                  }}
+                                >
+                                  Connect
+                                </s-button>
+
+                              ) : p.existsInStore && p.sync_status ? (
+                                // ❌ DISCONNECT CASE
+                                <s-button
+                                  tone="critical"
+                                  disabled={rowLoading}
+                                  {...(rowLoading ? { loading: true } : {})}
+                                  commandFor="delete-modal"
+                                  onClick={() => {
+                                    if (!p.productIds?.length) return;
+                                    setSelectedProduct(p);
+                                  }}
+                                >
+                                  Disconnect
+                                </s-button>
+
+                              ) : (
+                                // ➕ ADD CASE
                                 <s-button
                                   tone="auto"
                                   disabled={rowLoading}
@@ -607,7 +685,7 @@ export default function Index() {
         )}
         <s-modal id="delete-modal" heading="Delete Product">
           <s-paragraph>
-            Are you sure you want to delete all Shopify products for "{selectedProduct?.title}"?
+            Are you sure you want to disconnect all Shopify products for "{selectedProduct?.title}"?
           </s-paragraph>
 
           <s-button
@@ -629,7 +707,7 @@ export default function Index() {
             command="--hide"
             onClick={handleDeleteConfirmed}
           >
-            Delete
+            Disconnect
           </s-button>
         </s-modal>
       </s-query-container>
