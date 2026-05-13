@@ -150,6 +150,7 @@ async function buildSkuMap(shop, token) {
   console.log("Scanning Shopify products...");
 
   const variantMap = {};
+  const productSyncMap = {};
   let productCursor = null;
   let hasNextProducts = true;
 
@@ -161,7 +162,16 @@ async function buildSkuMap(shop, token) {
       query ($cursor: String) {
         products(first: 100, after: $cursor) {
           pageInfo { hasNextPage endCursor }
-          edges { node { id handle } }
+          edges {
+            node
+            {
+              id
+              handle
+              metafield(namespace: "custom", key: "sync_status") {
+                value
+              }
+            }
+          }
         }
       }
       `,
@@ -175,7 +185,7 @@ async function buildSkuMap(shop, token) {
       const handle = p.node.handle;
       const style = extractStyle(handle);
       if (!style) continue;
-
+      productSyncMap[style] = p.node.metafield?.value;
       let variantCursor = null;
       let hasNextVariants = true;
 
@@ -237,7 +247,8 @@ async function buildSkuMap(shop, token) {
 
   console.log("Total variants mapped:", Object.keys(variantMap).length);
 
-  return variantMap;
+  // return variantMap;
+  return { variantMap, productSyncMap };
 }
 
 /* ---------------- Stream Sanmar JSON ---------------- */
@@ -269,7 +280,8 @@ async function runInventorySync(shop, token, file) {
   const locationId = loc.locations.edges[0].node.id;
   console.log("Location:", locationId);
 
-  const variantMap = await buildSkuMap(shop, token);
+  // const variantMap = await buildSkuMap(shop, token);
+  const { variantMap, productSyncMap } = await buildSkuMap(shop, token);
   let updates = [];
 
   await processSanmar(file, async (row) => {
@@ -280,17 +292,40 @@ async function runInventorySync(shop, token, file) {
     const qty = Number(row["QTY"]);
     if (isNaN(qty)) return;
     if (!style) return;
-
+    const productSync = productSyncMap[style];
+    if (productSync !== undefined && productSync === "false") {
+      return;
+    }
     const key = `${style}-${color}-${size}`.toUpperCase();
     const inventoryItemId = variantMap[key];
 
     if (!inventoryItemId) return;
-
+    // if (!inventoryItemId) {
+    //   console.log("Variant not found:", key);
+    //   return;
+    // }
     console.log(
       `Updating → Style: ${style}, Color: ${color}, Size: ${size}, Qty: ${qty}`,
     );
 
-    updates.push({ inventoryItemId, locationId, quantity: qty });
+    const existingIndex = updates.findIndex(
+      (u) => u.inventoryItemId === inventoryItemId,
+    );
+
+    if (existingIndex >= 0) {
+      updates[existingIndex] = {
+        inventoryItemId,
+        locationId,
+        quantity: qty,
+      };
+    } else {
+      updates.push({
+        inventoryItemId,
+        locationId,
+        quantity: qty,
+      });
+    }
+    // updates.push({ inventoryItemId, locationId, quantity: qty });
 
     if (updates.length >= 50) {
       await pushUpdates(shop, token, updates);
@@ -327,9 +362,7 @@ async function pushUpdates(shop, token, quantities) {
       // const errors = res.inventorySetOnHandQuantities.userErrors;
 
       // if (errors.length) {
-      //   console.error("Shopify userErrors:", errors);
-      // } else {
-      //   console.log(" Batch success");
+      //   throw new Error(errors.map((e) => e.message).join(", "));
       // }
       console.log(" Batch success");
       return;
